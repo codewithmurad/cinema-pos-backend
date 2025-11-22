@@ -30,7 +30,30 @@ public interface ShowService {
     ResponseEntity<ShowWithSeatsResponse> getShowSeatMap(String showPublicId);
     
     // Phase 2 methods - Show Listing APIs
-    ResponseEntity<ShowsListResponse> getUpcomingShows(int page, int size);
+    
+    /**
+     * Core upcoming shows API used by controller.
+     *
+     * @param page          page index (0-based)
+     * @param size          page size
+     * @param moviePublicId optional movie filter; if null, no movie filter is applied
+     * @param showDate      optional date filter (today or future);
+     *                      if null, all future shows are returned
+     */
+    ResponseEntity<ShowsListResponse> getUpcomingShows(
+            int page,
+            int size,
+            String moviePublicId,
+            LocalDate showDate
+    );
+
+    /**
+     * Convenience overload preserving the old signature.
+     * Internally delegates to the new method with no filters.
+     */
+    default ResponseEntity<ShowsListResponse> getUpcomingShows(int page, int size) {
+        return getUpcomingShows(page, size, null, null);
+    }
     
     ResponseEntity<ShowsListResponse> getRunningShows();
     

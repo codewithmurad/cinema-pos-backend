@@ -21,6 +21,8 @@ public class ShowListItemDto {
     
     private String posterPath;
     
+    private String language;
+    
     private Integer durationMinutes;
     
     private String screenPublicId;

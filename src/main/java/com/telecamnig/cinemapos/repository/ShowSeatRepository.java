@@ -64,11 +64,19 @@ public interface ShowSeatRepository extends JpaRepository<ShowSeat, Long> {
 	@Query("SELECT ss FROM ShowSeat ss WHERE ss.showId = :showId AND ss.state = 'AVAILABLE' ORDER BY ss.rowIndex, ss.colIndex")
 	Page<ShowSeat> findAvailableSeats(@Param("showId") Long showId, Pageable pageable);
 
+	
 	/**
-	 * Find specific seats by publicIds for a show (seat selection)
+	 * Find specific seats by SEAT publicIds for a show (seat selection) -> Seat public Id refer to Seat table public id
 	 */
 	@Query("SELECT ss FROM ShowSeat ss WHERE ss.showId = :showId AND ss.seatPublicId IN :seatPublicIds")
 	List<ShowSeat> findByShowIdAndSeatPublicIds(@Param("showId") Long showId,
+			@Param("seatPublicIds") List<String> seatPublicIds);
+	
+	/**
+	 * Find specific seats by publicIds for a show (seat selection)  -> unique Show Seat public id
+	 */
+	@Query("SELECT ss FROM ShowSeat ss WHERE ss.showId = :showId AND ss.publicId IN :seatPublicIds")
+	List<ShowSeat> findByShowIdAndPublicIds(@Param("showId") Long showId,
 			@Param("seatPublicIds") List<String> seatPublicIds);
 
 	/**

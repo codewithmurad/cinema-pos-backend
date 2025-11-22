@@ -19,6 +19,8 @@ public class ShowDetailDto {
 	
 	private ScreenDto screen; // Complete screen details
 	
+	private String layoutJson;  // screen layout history data
+	
 	private LocalDateTime startAt;
 	
 	private LocalDateTime endAt;

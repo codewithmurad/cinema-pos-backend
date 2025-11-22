@@ -107,15 +107,15 @@ public class ShowServiceImpl implements ShowService {
     public ResponseEntity<ShowResponse> scheduleShow(ScheduleShowRequest request) {
         
         // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to scheduleShow()");
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(ShowResponse.builder()
-                            .success(false)
-                            .message(ApiResponseMessage.UNAUTHORIZED_ACCESS)
-                            .build());
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to scheduleShow()");
+//            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//                    .body(ShowResponse.builder()
+//                            .success(false)
+//                            .message(ApiResponseMessage.UNAUTHORIZED_ACCESS)
+//                            .build());
+//        }
 
         try {
             // Step 2: Validate request DTO
@@ -238,11 +238,11 @@ public class ShowServiceImpl implements ShowService {
          */
         
         // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getShowDetails for show: {}", showPublicId);
-            return buildUnauthorizedResponse();
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to getShowDetails for show: {}", showPublicId);
+//            return buildUnauthorizedResponse();
+//        }
 
         try {
             // Step 2: Validate input
@@ -304,11 +304,11 @@ public class ShowServiceImpl implements ShowService {
          */
         
         // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getShowSeats for show: {}", showPublicId);
-            return buildUnauthorizedResponse();
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to getShowSeats for show: {}", showPublicId);
+//            return buildUnauthorizedResponse();
+//        }
 
         try {
             // Step 2: Validate input
@@ -367,11 +367,11 @@ public class ShowServiceImpl implements ShowService {
          */
         
         // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getShowSeatMap for show: {}", showPublicId);
-            return buildUnauthorizedResponse();
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to getShowSeatMap for show: {}", showPublicId);
+//            return buildUnauthorizedResponse();
+//        }
 
         try {
             // Step 2: Validate input
@@ -429,23 +429,22 @@ public class ShowServiceImpl implements ShowService {
             return buildInternalErrorResponse(ApiResponseMessage.FETCH_FAILED);
         }
     }
-    
- // Add these methods to your existing ShowServiceImpl class
+    // Add these methods to your existing ShowServiceImpl class
 
     @Override
     @Transactional(readOnly = true)
-    public ResponseEntity<ShowsListResponse> getUpcomingShows(int page, int size) {
-        /**
-         * Retrieves all upcoming shows (scheduled but not yet started).
-         * Used by counter staff for upcoming show management and admin dashboard.
-         */
-        
-        // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getUpcomingShows");
-            return buildShowsUnauthorizedResponse();
-        }
+    public ResponseEntity<ShowsListResponse> getUpcomingShows(
+            int page,
+            int size,
+            String moviePublicId,
+            LocalDate showDate
+    ) {
+        // 🔒 Step 1: (optional) authentication
+        // Authentication auth = getAuthenticatedUser();
+        // if (auth == null) {
+        //     log.warn("Unauthorized access attempt to getUpcomingShows");
+        //     return buildShowsUnauthorizedResponse();
+        // }
 
         try {
             // Step 2: Validate pagination parameters
@@ -458,47 +457,112 @@ public class ShowServiceImpl implements ShowService {
                 return buildShowsBadRequestResponse("Page size must be between 1 and 100");
             }
 
-            // Step 3: Create pagination object
-            org.springframework.data.domain.Pageable pageable = 
-                org.springframework.data.domain.PageRequest.of(page, size, 
-                    org.springframework.data.domain.Sort.by("startAt").ascending());
-
-            // Step 4: Fetch upcoming shows (SCHEDULED status with future start time)
-            LocalDateTime currentTime = LocalDateTime.now();
-            
-            Page<Show> showsPage = showRepository.findByStatusAndStartTimeAfter(
-                com.telecamnig.cinemapos.utility.Constants.ShowStatus.SCHEDULED.getCode(), 
-                currentTime, 
-                pageable
+            Pageable pageable = PageRequest.of(
+                    page,
+                    size,
+                    Sort.by("startAt").ascending()
             );
 
-            // Step 5: Convert to DTOs
+            // Step 3: Build time range filters
+            //
+            // We support three modes:
+            // 1) No date filter → from = now, to = null (all future shows)
+            // 2) Date only      → from/to are that entire day (but if today, from = now)
+            // 3) Movie + date   → same as (2) but restricted to the movie
+            //
+            // Additionally, showDate must be TODAY or FUTURE. Past dates are rejected.
+            LocalDateTime now = LocalDateTime.now();
+            LocalDate today = now.toLocalDate();
+
+            LocalDateTime from;
+            LocalDateTime to = null; // null means "no upper bound"
+
+            if (showDate != null) {
+                // Prevent searching for past dates
+                if (showDate.isBefore(today)) {
+                    log.warn("Rejected upcoming shows search for past date: {}", showDate);
+                    return buildShowsBadRequestResponse("Show date must be today or a future date");
+                }
+
+                // Start and end of the requested day
+                LocalDateTime startOfDay = showDate.atStartOfDay();
+                LocalDateTime startOfNextDay = showDate.plusDays(1).atStartOfDay();
+
+                // If searching today: don't include shows that already started in the past
+                if (showDate.isEqual(today)) {
+                    from = now;
+                } else {
+                    from = startOfDay;
+                }
+                to = startOfNextDay; // exclusive upper bound
+            } else {
+                // No date filter → from now onwards
+                from = now;
+            }
+
+            // Step 4: Resolve optional movie filter
+            //
+            // If moviePublicId is provided, we resolve it to internal movieId.
+            // If the publicId is invalid, we return 400 (client error).
+            Long movieId = null;
+            if (moviePublicId != null && !moviePublicId.isBlank()) {
+                String trimmed = moviePublicId.trim();
+                Optional<Movie> movieOpt = movieRepository.findByPublicId(trimmed);
+                if (movieOpt.isEmpty()) {
+                    log.warn("Invalid moviePublicId provided: {}", trimmed);
+                    return buildShowsBadRequestResponse("Invalid movie reference");
+                }	
+                movieId = movieOpt.get().getId();
+            }
+
+            // Step 5: Execute repository search
+            Integer statusScheduled = ShowStatus.SCHEDULED.getCode();
+
+            Page<Show> showsPage = showRepository.searchUpcomingShows(
+                    statusScheduled,
+                    from,
+                    to,
+                    movieId,
+                    pageable
+            );
+
+            // Step 6: Convert entities to lightweight list DTOs
             List<ShowListItemDto> showDtos = showsPage.getContent().stream()
                     .map(this::convertToShowListItemDto)
                     .collect(Collectors.toList());
 
-            // Step 6: Build summary statistics
+            // Step 7: Build summary statistics (per screen, per movie, etc.)
             ShowsSummaryDto summary = buildUpcomingShowsSummary(showsPage.getContent());
 
-            log.info("Retrieved {} upcoming shows (page {} of {})", 
-                    showDtos.size(), page, showsPage.getTotalPages());
+            log.info(
+                    "Retrieved {} upcoming shows (page {} of {}) [moviePublicId={}, showDate={}]",
+                    showDtos.size(),
+                    page,
+                    showsPage.getTotalPages(),
+                    moviePublicId,
+                    showDate
+            );
 
-            return ResponseEntity.ok(ShowsListResponse.builder()
-                    .success(true)
-                    .message(ApiResponseMessage.FETCH_SUCCESS)
-                    .shows(showDtos)
-                    .page(showsPage.getNumber())
-                    .size(showsPage.getSize())
-                    .totalElements(showsPage.getTotalElements())
-                    .totalPages(showsPage.getTotalPages())
-                    .summary(summary)
-                    .build());
+            // Step 8: Build and return response
+            return ResponseEntity.ok(
+                    ShowsListResponse.builder()
+                            .success(true)
+                            .message(ApiResponseMessage.FETCH_SUCCESS)
+                            .shows(showDtos)
+                            .page(showsPage.getNumber())
+                            .size(showsPage.getSize())
+                            .totalElements(showsPage.getTotalElements())
+                            .totalPages(showsPage.getTotalPages())
+                            .summary(summary)
+                            .build()
+            );
 
         } catch (Exception e) {
             log.error("Unexpected error retrieving upcoming shows", e);
             return buildShowsInternalErrorResponse(ApiResponseMessage.FETCH_FAILED);
         }
     }
+
 
     @Override
     @Transactional(readOnly = true)
@@ -509,11 +573,11 @@ public class ShowServiceImpl implements ShowService {
          */
         
         // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getRunningShows");
-            return buildShowsUnauthorizedResponse();
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to getRunningShows");
+//            return buildShowsUnauthorizedResponse();
+//        }
 
         try {
             // Step 2: Fetch running shows (RUNNING status with current time within show duration)
@@ -553,11 +617,11 @@ public class ShowServiceImpl implements ShowService {
          */
         
         // 🔒 Step 1: Authentication check
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getActiveShows");
-            return buildShowsUnauthorizedResponse();
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to getActiveShows");
+//            return buildShowsUnauthorizedResponse();
+//        }
 
         try {
             // Step 2: Validate pagination parameters
@@ -619,11 +683,11 @@ public class ShowServiceImpl implements ShowService {
          */
         
         // 🔒 Step 1: Authentication check (already handled by @PreAuthorize, but double-check)
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to getShowHistory");
-            return buildShowsUnauthorizedResponse();
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to getShowHistory");
+//            return buildShowsUnauthorizedResponse();
+//        }
 
         try {
             // Step 2: Validate pagination parameters
@@ -690,11 +754,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to searchShows");
-	         return buildShowsUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to searchShows");
+//	         return buildShowsUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate pagination parameters
@@ -755,11 +819,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to getShowsByMovie for movie: {}", moviePublicId);
-	         return buildShowsUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to getShowsByMovie for movie: {}", moviePublicId);
+//	         return buildShowsUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate parameters
@@ -829,11 +893,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to getShowsByScreen for screen: {}", screenPublicId);
-	         return buildShowsUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to getShowsByScreen for screen: {}", screenPublicId);
+//	         return buildShowsUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate parameters
@@ -903,11 +967,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to getShowsByDate for date: {}", date);
-	         return buildShowsUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to getShowsByDate for date: {}", date);
+//	         return buildShowsUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate parameters
@@ -983,11 +1047,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check (Admin only - handled by controller, but double-check)
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to updateShowStatus for show: {}", showPublicId);
-	         return buildCommonUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to updateShowStatus for show: {}", showPublicId);
+//	         return buildCommonUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate input
@@ -1062,11 +1126,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to cancelShow for show: {}", showPublicId);
-	         return buildCommonUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to cancelShow for show: {}", showPublicId);
+//	         return buildCommonUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate input
@@ -1136,11 +1200,11 @@ public class ShowServiceImpl implements ShowService {
 	      */
 	     
 	     // 🔒 Step 1: Authentication check (Admin only)
-	     Authentication auth = getAuthenticatedUser();
-	     if (auth == null) {
-	         log.warn("Unauthorized access attempt to getAllShows");
-	         return buildShowsUnauthorizedResponse();
-	     }
+//	     Authentication auth = getAuthenticatedUser();
+//	     if (auth == null) {
+//	         log.warn("Unauthorized access attempt to getAllShows");
+//	         return buildShowsUnauthorizedResponse();
+//	     }
 	
 	     try {
 	         // Step 2: Validate pagination parameters
@@ -1325,6 +1389,7 @@ public class ShowServiceImpl implements ShowService {
                 .publicId(show.getPublicId())
                 .movie(movieDto)
                 .screen(screenDto)
+                .layoutJson(screen.getLayoutJson())
                 .startAt(show.getStartAt())
                 .endAt(show.getEndAt())
                 .status(show.getStatus())
@@ -1519,6 +1584,7 @@ public class ShowServiceImpl implements ShowService {
                     .moviePublicId(show.getMoviePublicId())
                     .movieTitle(movie != null ? movie.getTitle() : "Unknown Movie")
                     .posterPath(movie != null ? movie.getPosterPath() : null)
+                    .language(movie != null ? movie.getAudioLanguages() : "")
                     .durationMinutes(movie != null ? movie.getDurationMinutes() : 0)
                     .screenPublicId(show.getScreenPublicId())
                     .screenName(screen != null ? screen.getName() : "Unknown Screen")
@@ -1967,6 +2033,7 @@ public class ShowServiceImpl implements ShowService {
                 .screenId(screen.getId())
                 .moviePublicId(movie.getPublicId())
                 .screenPublicId(screen.getPublicId())
+                .layoutJson(screen.getLayoutJson())
                 .startAt(request.getStartAt())
                 .endAt(endAt);
 

@@ -1,12 +1,14 @@
 package com.telecamnig.cinemapos.service.impl;
 
-import java.io.File;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.net.URLConnection;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import javax.imageio.ImageIO;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,7 +101,14 @@ public class MovieServiceImpl implements MovieService {
 
         // ✅ Handle poster file upload using your LocalStorageService
         String posterPath = null;
+        
         if (posterFile != null && !posterFile.isEmpty()) {
+        	
+        	if (!isValidPosterRatio(posterFile)) {
+        	    return ResponseEntity.badRequest()
+        	        .body(new CommonApiResponse(false, "Poster must have a 2:3 width:height ratio."));
+        	}
+        	
             try {
                 posterPath = localStorageService.store(posterFile);
                 log.info("Poster uploaded successfully via LocalStorageService: {}", posterPath);
@@ -442,16 +451,16 @@ public class MovieServiceImpl implements MovieService {
 	public ResponseEntity<MoviesResponse> getMoviesByStatus(int status, Pageable pageable, boolean paged) {
 
 	    // ✅ Check authentication
-	    Authentication auth = getAuthenticatedUser();
-	   
-	    if (auth == null) {
-	        log.warn("Unauthorized access to getMoviesByStatus: {}", status);
-	        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-	                .body(MoviesResponse.builder()
-	                        .success(false)
-	                        .message(ApiResponseMessage.UNAUTHORIZED_ACCESS)
-	                        .build());
-	    }
+//	    Authentication auth = getAuthenticatedUser();
+//	   
+//	    if (auth == null) {
+//	        log.warn("Unauthorized access to getMoviesByStatus: {}", status);
+//	        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//	                .body(MoviesResponse.builder()
+//	                        .success(false)
+//	                        .message(ApiResponseMessage.UNAUTHORIZED_ACCESS)
+//	                        .build());
+//	    }
 
 	    // ✅ Validate movie status
 	    if (!ALLOWED_STATUS_CODES.contains(status)) {
@@ -690,12 +699,12 @@ public class MovieServiceImpl implements MovieService {
 	@Transactional(readOnly = true)
 	public ResponseEntity<Resource> getMoviePoster(String publicId) {
 	    
-		Authentication auth = getAuthenticatedUser();
-	    
-		if (auth == null) {
-	        log.warn("Unauthorized access to getMoviePoster: {}", publicId);
-	        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-	    }
+//		Authentication auth = getAuthenticatedUser();
+//	    
+//		if (auth == null) {
+//	        log.warn("Unauthorized access to getMoviePoster: {}", publicId);
+//	        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+//	    }
 
 	    var movieOpt = movieRepository.findByPublicId(publicId);
 	    
@@ -743,6 +752,24 @@ public class MovieServiceImpl implements MovieService {
 	
 
     // ---------- helpers ----------
+	
+	private boolean isValidPosterRatio(MultipartFile posterFile) {
+	    try {
+	        BufferedImage img = ImageIO.read(posterFile.getInputStream());
+	        if (img == null) return false;
+
+	        double width = img.getWidth();
+	        double height = img.getHeight();
+
+	        double ratio = width / height;
+	        double expected = 2.0 / 3.0;
+
+	        // allow ±5% tolerance
+	        return Math.abs(ratio - expected) <= 0.05;
+	    } catch (IOException e) {
+	        return false;
+	    }
+	}
 	
 	private MovieDto mapToDto(Movie m) {
 	    return MovieDto.builder()

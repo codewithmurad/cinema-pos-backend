@@ -14,6 +14,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
+import jakarta.persistence.Lob;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -91,6 +92,13 @@ public class Show {
      */
     @Column(name = "screen_public_id", length = 36)
     private String screenPublicId;
+    
+    /**
+     * Store the screen layout snapshot (TEXT)
+     */
+    @Lob
+    @Column(name = "layout_json", columnDefinition = "TEXT")
+    private String layoutJson;
 
     /**
      * Show start and end times (inclusive start, exclusive end recommended).

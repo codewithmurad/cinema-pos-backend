@@ -59,7 +59,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
             Long showId = showSeats.get(0).getShowId(); // Get showId from first seat
 
             // 2. Find the specific seat by seatPublicId and showId
-            List<ShowSeat> targetSeats = showSeatRepository.findByShowIdAndSeatPublicIds(showId, List.of(seatPublicId));
+            List<ShowSeat> targetSeats = showSeatRepository.findByShowIdAndPublicIds(showId, List.of(seatPublicId));
             
             if (targetSeats.isEmpty()) {
                 log.warn("Seat not found - Show: {}, Seat: {}", showPublicId, seatPublicId);

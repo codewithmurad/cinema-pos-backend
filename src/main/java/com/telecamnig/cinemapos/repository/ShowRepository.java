@@ -78,6 +78,37 @@ public interface ShowRepository extends JpaRepository<Show, Long> {
     
     @Query("SELECT s FROM Show s WHERE s.startAt >= :startFrom AND s.status IN (0, 1) ORDER BY s.startAt ASC")
     List<Show> findUpcomingShows(@Param("startFrom") LocalDateTime startFrom);
+    
+    /**
+     * Searches upcoming shows with optional filters.
+     *
+     * Behavior:
+     * - Always filters by status and "from" datetime (startAt >= :from).
+     * - If :to is non-null, also enforces startAt < :to (used for single-day search).
+     * - If :movieId is non-null, filters by given movie.
+     *
+     * This allows:
+     * - movie only     → from = now, to = null, movieId != null
+     * - date only      → from/to set for that day, movieId = null
+     * - movie + date   → from/to set for that day, movieId != null
+     * - no filters     → from = now, to = null, movieId = null
+     */
+    @Query("""
+        SELECT s FROM Show s
+        WHERE s.status = :status
+          AND s.startAt >= :from
+          AND (:to IS NULL OR s.startAt < :to)
+          AND (:movieId IS NULL OR s.movieId = :movieId)
+        ORDER BY s.startAt ASC
+        """)
+    Page<Show> searchUpcomingShows(
+            @Param("status") Integer status,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("movieId") Long movieId,
+            Pageable pageable
+    );
+
 
     // ==================== COMPLEX BUSINESS QUERIES ====================
     
