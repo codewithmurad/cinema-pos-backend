@@ -35,11 +35,11 @@ import com.telecamnig.cinemapos.repository.ShowRepository;
 import com.telecamnig.cinemapos.repository.ShowSeatRepository;
 import com.telecamnig.cinemapos.repository.UserRepository;
 import com.telecamnig.cinemapos.service.BookingService;
+import com.telecamnig.cinemapos.service.SeatHoldService;
 import com.telecamnig.cinemapos.utility.ApiResponseMessage;
 import com.telecamnig.cinemapos.utility.Constants.BookingStatus;
 import com.telecamnig.cinemapos.utility.Constants.PaymentMode;
 import com.telecamnig.cinemapos.utility.Constants.ShowSeatState;
-import com.telecamnig.cinemapos.websocket.SeatHoldService;
 import com.telecamnig.cinemapos.websocket.WebSocketService;
 
 import lombok.RequiredArgsConstructor;
@@ -57,12 +57,10 @@ import lombok.extern.slf4j.Slf4j;
  * 
  * BUSINESS RULES:
  * - Seats must be HELD before booking confirmation
+ * - Seat must be held by the SAME counter user who confirms booking
  * - 5-minute hold timeout for seat selection
  * - Immutable booking records for audit trail
  * - Real-time updates via WebSocket
- * 
- * @author Your Name
- * @version 1.0
  */
 @Service
 @RequiredArgsConstructor
@@ -77,7 +75,7 @@ public class BookingServiceImpl implements BookingService {
     private final WebSocketService webSocketService;
     
     public static final int MAX_SEATS_PER_BOOKING = 10; // Maximum seats per booking
-    public static final int MIN_MINUTES_BEFORE_SHOW_FOR_BOOKING = 00; // No bookings if show started
+    public static final int MIN_MINUTES_BEFORE_SHOW_FOR_BOOKING = 0; // No bookings if show started
 
     // ========== MAIN BOOKING METHODS ==========
 
@@ -88,10 +86,16 @@ public class BookingServiceImpl implements BookingService {
             log.info("Creating booking for show: {}, seats: {}", 
                     bookingRequest.getShowPublicId(), bookingRequest.getSeatPublicIds());
 
-            // 1. Validate booking request
+            // 1. Validate booking request body
             ResponseEntity<BookingDetailResponse> validationResponse = validateBookingRequest(bookingRequest);
             if (validationResponse != null) {
                 return validationResponse;
+            }
+
+            // Optional: enforce max seats per booking
+            if (bookingRequest.getSeatPublicIds().size() > MAX_SEATS_PER_BOOKING) {
+                return buildErrorResponse(HttpStatus.BAD_REQUEST,
+                        "Cannot book more than " + MAX_SEATS_PER_BOOKING + " seats in a single booking");
             }
 
             // 2. Get current authenticated user (counter staff)
@@ -113,15 +117,22 @@ public class BookingServiceImpl implements BookingService {
             List<ShowSeat> showSeats = validateAndGetShowSeats(bookingRequest.getSeatPublicIds(), show.getId());
             
             // 6. Check seat availability and holds
+            //    BUSINESS RULE:
+            //    - Seat MUST be in HELD state
+            //    - Seat MUST be held by the SAME user who is doing this booking
+            //    - Seat hold MUST NOT be expired
             if (!areSeatsAvailableForBooking(showSeats)) {
-                return buildErrorResponse(HttpStatus.CONFLICT, "One or more seats are not available for booking");
+                return buildErrorResponse(HttpStatus.CONFLICT,
+                        "One or more seats are not available for booking or not held by this user");
             }
 
             // 7. Calculate total booking amount
             BigDecimal totalAmount = calculateTotalAmount(showSeats);
 
             // 8. Create booking records and update database
-            List<Booking> bookings = createBookingRecords(bookingRequest, show, showSeats, totalAmount, currentUser.getId());
+            List<Booking> bookings = createBookingRecords(
+                    bookingRequest, show, showSeats, totalAmount, currentUser.getId()
+            );
 
             // 9. Update show seat states to SOLD and confirm holds
             updateShowSeatStates(showSeats, bookings.get(0).getId());
@@ -562,20 +573,64 @@ public class BookingServiceImpl implements BookingService {
     }
 
     /**
-     * Checks if all seats are available for booking (AVAILABLE or HELD state).
+     * Checks if all seats are valid for booking for the CURRENT logged-in user.
+     *
+     * BUSINESS RULES ENFORCED:
+     * - Seat must be in HELD state
+     * - Seat hold must NOT be expired (expiresAt > now)
+     * - Seat must be held by SAME user who is confirming booking
+     *
+     * We derive the "current user" identifier from Spring Security's Authentication name,
+     * which should be the same identifier used as `reservedBy` in seat hold.
      */
     private boolean areSeatsAvailableForBooking(List<ShowSeat> showSeats) {
-        return showSeats.stream()
-                .allMatch(seat -> ShowSeatState.AVAILABLE.getLabel().equals(seat.getState()) || 
-                                 ShowSeatState.HELD.getLabel().equals(seat.getState()));
+        LocalDateTime now = LocalDateTime.now();
+
+        // This should match what you use in SeatStateEvent.reservedBy
+        String bookingUserIdentifier = null;
+        if (SecurityContextHolder.getContext().getAuthentication() != null) {
+            bookingUserIdentifier = SecurityContextHolder.getContext().getAuthentication().getName();
+        }
+
+        final String finalBookingUserIdentifier = bookingUserIdentifier;
+
+        return showSeats.stream().allMatch(seat -> {
+            // Must be in HELD state
+            if (!ShowSeatState.HELD.getLabel().equals(seat.getState())) {
+                log.warn("Seat not in HELD state at booking time - Seat: {}, State: {}",
+                        seat.getSeatPublicId(), seat.getState());
+                return false;
+            }
+
+            // Must not be expired
+            if (seat.getExpiresAt() == null || !seat.getExpiresAt().isAfter(now)) {
+                log.warn("Seat hold expired before booking - Seat: {}, ExpiresAt: {}",
+                        seat.getSeatPublicId(), seat.getExpiresAt());
+                return false;
+            }
+
+            // Must be held by the same user
+            if (finalBookingUserIdentifier == null ||
+                    seat.getReservedBy() == null ||
+                    !seat.getReservedBy().equals(finalBookingUserIdentifier)) {
+
+                log.warn("Seat held by different user - Seat: {}, HeldBy: {}, BookingBy: {}",
+                        seat.getSeatPublicId(), seat.getReservedBy(), finalBookingUserIdentifier);
+                return false;
+            }
+
+            return true;
+        });
     }
 
     /**
      * Checks if show is active and in the future.
      */
     private boolean isShowActiveAndFuture(Show show) {
-        return show.getStatus() == 1 && // ACTIVE status code from ShowStatus enum
-               show.getStartAt().isAfter(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime cutoff = show.getStartAt()
+                .minusMinutes(MIN_MINUTES_BEFORE_SHOW_FOR_BOOKING);
+        return show.getStatus() == 1 && cutoff.isAfter(now);
     }
 
     /**
@@ -638,6 +693,7 @@ public class BookingServiceImpl implements BookingService {
 
     /**
      * Releases seats associated with a booking (on cancellation/refund).
+     * (NOTE: You can extend this to broadcast seat release via WebSocket if needed.)
      */
     private void releaseSeatsForBooking(Long bookingId) {
         List<ShowSeat> showSeats = showSeatRepository.findByConfirmedBookingId(bookingId);
@@ -647,8 +703,9 @@ public class BookingServiceImpl implements BookingService {
             showSeat.setConfirmedBookingId(null);
             showSeatRepository.save(showSeat);
             
-            // Broadcast seat release to all POS systems
-            // Note: Need showPublicId for broadcasting - would need additional lookup
+            // TODO (optional for prod):
+            // Broadcast seat release to all POS systems so UIs update in real-time
+            // You'd need showPublicId (can resolve from showRepository using showId).
         }
     }
 

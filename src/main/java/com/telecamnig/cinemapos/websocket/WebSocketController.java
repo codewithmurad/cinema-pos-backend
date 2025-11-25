@@ -4,7 +4,6 @@ import java.time.LocalDateTime;
 
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 
 import com.telecamnig.cinemapos.dto.SeatStateEvent;
@@ -15,18 +14,12 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * WebSocket Controller for handling real-time messaging between POS systems.
- * 
- * This controller processes WebSocket messages from clients and broadcasts
- * updates to all connected POS systems for real-time synchronization.
- * 
+ *
  * MESSAGE FLOW:
  * 1. POS client connects to /ws endpoint
  * 2. Client subscribes to /topic/shows/{showId}/seats for seat updates
- * 3. When seat state changes, server broadcasts to all subscribers
+ * 3. When seat state changes, server broadcasts via WebSocketService
  * 4. All POS systems update their UI in real-time
- * 
- * @author Your Name
- * @version 1.0
  */
 @Controller
 @RequiredArgsConstructor
@@ -34,94 +27,139 @@ import lombok.extern.slf4j.Slf4j;
 public class WebSocketController {
 
     private final SeatHoldService seatHoldService;
-    
-    private final SimpMessagingTemplate messagingTemplate; // ✅ Add this
+    private final WebSocketService webSocketService;   // wrapper over SimpMessagingTemplate
 
     /**
      * Handles seat hold requests from POS clients.
-     * 
-     * When a counter staff selects a seat for booking, the POS client sends
-     * a hold request to temporarily reserve the seat while the customer completes payment.
-     * 
-     * MESSAGE ROUTING:
-     * - Client sends to: /app/seats/hold
-     * - Server broadcasts to: /topic/shows/{showId}/seats
-     * 
-     * @param seatEvent The seat hold request from client
-     * @param headerAccessor WebSocket message headers
-     * @return SeatStateEvent broadcast to all subscribers
+     *
+     * Client → /app/seats/hold
+     * Server broadcasts to → /topic/shows/{showPublicId}/seats
+     *
+     * Expected payload (SeatStateEvent):
+     * - showPublicId
+     * - seatPublicId
+     * - reservedBy (counter username)
+     * - state = "HELD"
      */
     @MessageMapping("/seats/hold")
     public void handleSeatHold(SeatStateEvent seatEvent, SimpMessageHeaderAccessor headerAccessor) {
         String sessionId = headerAccessor.getSessionId();
         String user = headerAccessor.getUser() != null ? headerAccessor.getUser().getName() : "unknown";
-        
-        log.info("Seat hold request received - Session: {}, User: {}, Show: {}, Seat: {}", 
+
+        log.info("Seat hold request received - Session: {}, User: {}, Show: {}, Seat: {}",
                 sessionId, user, seatEvent.getShowPublicId(), seatEvent.getSeatPublicId());
-        
-        // Validate the seat hold request
+
+        // 1️⃣ Basic validation of the incoming event
         if (!isValidSeatHoldRequest(seatEvent)) {
             log.warn("Invalid seat hold request from session: {}", sessionId);
-            // Send error directly to the topic
             sendErrorToTopic(seatEvent.getShowPublicId(), seatEvent, "Invalid seat hold request");
             return;
         }
-        
+
         try {
-            // Process the seat hold through our service
-            seatHoldService.holdSeat(sessionId, seatEvent.getShowPublicId(), 
-                                   seatEvent.getSeatPublicId(), seatEvent.getReservedBy());
-            
+            // 2️⃣ Delegate business logic to SeatHoldService
+            //    This will:
+            //    - validate that seat is AVAILABLE
+            //    - mark it HELD in DB, set expiry
+            //    - track seat against WebSocket session
+            //    - broadcast HELD state via WebSocketService.broadcastSeatUpdate(...)
+            seatHoldService.holdSeat(
+                    sessionId,
+                    seatEvent.getShowPublicId(),
+                    seatEvent.getSeatPublicId(),
+                    seatEvent.getReservedBy()
+            );
+
             log.info("Seat hold processed successfully - Show: {}, Seat: {}, User: {}",
                     seatEvent.getShowPublicId(), seatEvent.getSeatPublicId(), seatEvent.getReservedBy());
-            
-            // ✅ Send success response to the specific show topic
-            messagingTemplate.convertAndSend("/topic/shows/" + seatEvent.getShowPublicId() + "/seats", seatEvent);
-            
+
+            // ⚠️ NO DIRECT SEND HERE
+            // SeatHoldServiceImpl already broadcasts HELD state using WebSocketService
+
         } catch (Exception e) {
-            log.error("Error processing seat hold - Show: {}, Seat: {}", 
+            log.error("Error processing seat hold - Show: {}, Seat: {}",
                     seatEvent.getShowPublicId(), seatEvent.getSeatPublicId(), e);
-            // ✅ Send error to the specific show topic
-            sendErrorToTopic(seatEvent.getShowPublicId(), seatEvent, "Failed to hold seat: " + e.getMessage());
+
+            // 3️⃣ If any error, send an ERROR event to the same show topic
+            sendErrorToTopic(seatEvent.getShowPublicId(), seatEvent,
+                    "Failed to hold seat: " + e.getMessage());
         }
     }
 
     /**
      * Handles seat release requests from POS clients.
-     * 
-     * When a seat hold expires or is manually released, this method broadcasts
-     * the release to all connected POS systems.
-     * 
-     * @param seatEvent The seat release request
-     * @param headerAccessor WebSocket message headers
-     * @return SeatStateEvent broadcast to all subscribers
+     *
+     * Client → /app/seats/release
+     * Server broadcasts to → /topic/shows/{showPublicId}/seats
+     *
+     * Expected payload (SeatStateEvent):
+     * - showPublicId
+     * - seatPublicId
+     * - reservedBy (counter username trying to release)
+     * - state = "AVAILABLE" (from frontend perspective)
+     *
+     * Business rule:
+     * - Only the same user who HELD the seat can RELEASE it.
+     *   That check is implemented in SeatHoldServiceImpl.releaseSeat(...)
      */
     @MessageMapping("/seats/release")
     public void handleSeatRelease(SeatStateEvent seatEvent, SimpMessageHeaderAccessor headerAccessor) {
         String sessionId = headerAccessor.getSessionId();
-        
-        log.info("Seat release request received - Session: {}, Show: {}, Seat: {}", 
-                sessionId, seatEvent.getShowPublicId(), seatEvent.getSeatPublicId());
-        
+
+        log.info("Seat release request received - Session: {}, Show: {}, Seat: {}, RequestedBy: {}",
+                sessionId,
+                seatEvent.getShowPublicId(),
+                seatEvent.getSeatPublicId(),
+                seatEvent.getReservedBy()
+        );
+
         try {
-            // Process the seat release through our service
-            seatHoldService.releaseSeat(seatEvent.getSeatPublicId(), seatEvent.getShowPublicId());
-            
+            // 1️⃣ Call the new three-argument method:
+            //    releaseSeat(seatPublicId, showPublicId, reservedBy)
+            //
+            // Inside SeatHoldServiceImpl:
+            //    if (showSeat.getReservedBy() != null
+            //        && reservedBy != null
+            //        && !reservedBy.equals(showSeat.getReservedBy())) {
+            //        throw new RuntimeException("Cannot release seat held by another user");
+            //    }
+            //
+            // So this enforces: only owner of the hold can release.
+            seatHoldService.releaseSeat(
+                    seatEvent.getSeatPublicId(),
+                    seatEvent.getShowPublicId(),
+                    seatEvent.getReservedBy()
+            );
+
             log.info("Seat release processed successfully - Show: {}, Seat: {}",
                     seatEvent.getShowPublicId(), seatEvent.getSeatPublicId());
-            
-            // ✅ Send release confirmation to the specific show topic
-            messagingTemplate.convertAndSend("/topic/shows/" + seatEvent.getShowPublicId() + "/seats", seatEvent);
-            
+
+            // ⚠️ NO DIRECT BROADCAST HERE
+            // SeatHoldServiceImpl.releaseSeat(...) already:
+            //   - updates DB state to AVAILABLE
+            //   - clears reservedBy / timestamps
+            //   - broadcasts SEAT_RELEASED via WebSocketService.broadcastSeatUpdate(...)
+
         } catch (Exception e) {
-            log.error("Error processing seat release - Show: {}, Seat: {}", 
-                    seatEvent.getShowPublicId(), seatEvent.getSeatPublicId(), e);
-            sendErrorToTopic(seatEvent.getShowPublicId(), seatEvent, "Failed to release seat: " + e.getMessage());
+            log.error("Error processing seat release - Show: {}, Seat: {}, Error: {}",
+                    seatEvent.getShowPublicId(),
+                    seatEvent.getSeatPublicId(),
+                    e.getMessage()
+            );
+
+            // 2️⃣ Broadcast an ERROR event so UI can show a toast / revert
+            sendErrorToTopic(seatEvent.getShowPublicId(), seatEvent,
+                    "Failed to release seat: " + e.getMessage());
         }
     }
 
     /**
-     * Sends error message to specific show topic
+     * Sends an ERROR SeatStateEvent to the show's WebSocket topic.
+     *
+     * This is used when:
+     * - validation fails
+     * - seat cannot be held/released
+     * - internal exception occurs
      */
     private void sendErrorToTopic(String showPublicId, SeatStateEvent originalEvent, String errorMessage) {
         SeatStateEvent errorEvent = SeatStateEvent.builder()
@@ -132,36 +170,36 @@ public class WebSocketController {
                 .timestamp(LocalDateTime.now())
                 .eventType("ERROR")
                 .build();
-        
-        messagingTemplate.convertAndSend("/topic/shows/" + showPublicId + "/seats", errorEvent);
+
+        log.warn("Sending error event for show: {}, seat: {}, message: {}",
+                showPublicId, originalEvent.getSeatPublicId(), errorMessage);
+
+        webSocketService.broadcastSeatUpdate(showPublicId, errorEvent);
     }
 
     /**
-     * Handles heartbeat/ping messages from clients.
+     * Heartbeat / ping from POS clients.
      * 
-     * POS clients send periodic heartbeat messages to maintain connection
-     * and confirm they're still active.
-     * 
-     * @param message The heartbeat message
-     * @param headerAccessor WebSocket message headers
+     * Client → /app/heartbeat
+     * Used for monitoring active connections if needed.
      */
     @MessageMapping("/heartbeat")
     public void handleHeartbeat(String message, SimpMessageHeaderAccessor headerAccessor) {
         String sessionId = headerAccessor.getSessionId();
         String user = headerAccessor.getUser() != null ? headerAccessor.getUser().getName() : "unknown";
-        
-        log.debug("Heartbeat received - Session: {}, User: {}, Message: {}", 
+
+        log.debug("Heartbeat received - Session: {}, User: {}, Message: {}",
                 sessionId, user, message);
-        
-        // Update last activity timestamp for this session
-        // This can be used for connection monitoring and cleanup
     }
 
     /**
-     * Validates seat hold requests from clients.
-     * 
-     * @param seatEvent The seat event to validate
-     * @return true if valid, false otherwise
+     * Validates seat hold requests from clients before processing.
+     *
+     * Checks:
+     * - showPublicId not blank
+     * - seatPublicId not blank
+     * - reservedBy not blank
+     * - state == "HELD"
      */
     private boolean isValidSeatHoldRequest(SeatStateEvent seatEvent) {
         if (seatEvent.getShowPublicId() == null || seatEvent.getShowPublicId().trim().isEmpty()) {
@@ -177,23 +215,5 @@ public class WebSocketController {
             return false;
         }
         return true;
-    }
-
-    /**
-     * Creates an error event for invalid requests.
-     * 
-     * @param originalEvent The original seat event
-     * @param errorMessage The error message
-     * @return Error seat event
-     */
-    private SeatStateEvent createErrorEvent(SeatStateEvent originalEvent, String errorMessage) {
-        return SeatStateEvent.builder()
-                .showPublicId(originalEvent.getShowPublicId())
-                .seatPublicId(originalEvent.getSeatPublicId())
-                .state("ERROR")
-                .reservedBy(originalEvent.getReservedBy())
-                .timestamp(java.time.LocalDateTime.now())
-                .eventType("ERROR")
-                .build();
     }
 }

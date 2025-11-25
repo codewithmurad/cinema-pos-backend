@@ -1,66 +1,81 @@
 package com.telecamnig.cinemapos.service;
 
 /**
- * Service interface for managing seat hold expiration and automatic release.
- * 
- * BUSINESS RULES:
- * - Seats are held for maximum 5 minutes (300 seconds)
- * - After 5 minutes, held seats are automatically released
- * - Released seats become AVAILABLE for other customers
- * - Automatic cleanup every 30 seconds to check for expired holds
- * 
- * This prevents seats from being permanently held when:
- * - Customer changes mind
- * - Counter staff forgets to release seats  
- * - POS system crashes/disconnects
- * 
- * @author Your Name
- * @version 1.0
+ * =====================================================================================
+ *  SeatHoldService — Interface for REAL-TIME seat hold management
+ * =====================================================================================
+ *
+ *  PURPOSE:
+ *  --------
+ *  Defines all operations required for temporary seat reservations
+ *  BEFORE an actual booking is confirmed.
+ *
+ *  USED BY:
+ *  --------
+ *  - WebSocketController (hold + release events from POS counters)
+ *  - BookingService      (confirming seats after payment)
+ *  - Scheduled Jobs      (auto-expiring stale seat holds)
+ *
+ *  WHY THIS INTERFACE?
+ *  -------------------
+ *  To keep the logic decoupled and future-proof. Multiple implementations
+ *  can exist (Redis, Memory, Database, Hybrid) without touching controllers.
+ *
+ *  CORE RESPONSIBILITIES:
+ *  ----------------------
+ *  ✔ Hold seat (5 minutes)  
+ *  ✔ Release seat manually  
+ *  ✔ Release seat on session disconnect  
+ *  ✔ Confirm seat after booking  
+ *  ✔ Provide remaining time for countdown timer UI  
+ *
+ * =====================================================================================
  */
 public interface SeatHoldService {
 
     /**
-     * Holds a seat for a specific session with 5-minute expiration.
-     * Updates database, broadcasts via WebSocket, and tracks for cleanup.
+     * TEMPORARILY holds a seat for a counter user for 5 minutes.
      *
-     * @param sessionId The WebSocket session ID
-     * @param showPublicId The show identifier
-     * @param seatPublicId The seat to hold
-     * @param reservedBy The user who reserved the seat
+     * @param sessionId     WebSocket session ID of the POS client
+     * @param showPublicId  Public ID of the show
+     * @param seatPublicId  Public ID of the seat being held
+     * @param reservedBy    User who is holding the seat (cashier username)
      */
     void holdSeat(String sessionId, String showPublicId, String seatPublicId, String reservedBy);
 
     /**
-     * Releases a specific seat hold.
-     * Updates database, broadcasts via WebSocket, and removes tracking.
+     * RELEASES a held seat.
      *
-     * @param seatPublicId The seat to release
-     * @param showPublicId The show identifier for broadcasting
+     * SECURITY RULE:
+     * Only the same counter user who held the seat can release it.
+     *
+     * @param seatPublicId  Public ID of the seat being released
+     * @param showPublicId  Public ID of the show
+     * @param reservedBy    User attempting to release the seat
      */
-    void releaseSeat(String seatPublicId, String showPublicId);
+    void releaseSeat(String seatPublicId, String showPublicId, String reservedBy);
 
     /**
-     * Releases all seats held by a specific session.
-     * Critical: Called when POS disconnects unexpectedly to prevent stuck seats.
+     * Releases ALL seats when a POS websocket session disconnects.
+     * Prevents stuck seats if browser/tab is closed abruptly.
      *
-     * @param sessionId The session to cleanup
+     * @param sessionId WebSocket session ID
      */
     void releaseSeatsBySession(String sessionId);
 
     /**
-     * Confirms a seat hold (converts HELD to SOLD when booking confirmed).
-     * Removes the seat from hold tracking.
+     * CONFIRMS a held seat (called after booking success).
+     * Removes the seat from session tracking so it never auto-releases again.
      *
-     * @param seatPublicId The seat that was sold
+     * @param seatPublicId Public ID of the sold seat
      */
     void confirmSeatHold(String seatPublicId);
 
     /**
-     * Gets the remaining hold time for a seat in seconds.
+     * Returns remaining seconds before seat hold expires – used for UI timer.
      *
-     * @param seatPublicId The seat to check
-     * @return Remaining hold time in seconds, or 0 if not held or expired
+     * @param seatPublicId Public ID of the seat
+     * @return seconds remaining (0 if expired)
      */
     long getRemainingHoldTime(String seatPublicId);
-    
 }
