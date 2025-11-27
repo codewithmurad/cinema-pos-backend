@@ -104,6 +104,12 @@ public class BookingServiceImpl implements BookingService {
                 return buildErrorResponse(HttpStatus.UNAUTHORIZED, ApiResponseMessage.UNAUTHORIZED_ACCESS);
             }
 
+            // This identifier MUST match what you use as `reservedBy`
+            String bookingUserIdentifier = null;
+            if (SecurityContextHolder.getContext().getAuthentication() != null) {
+                bookingUserIdentifier = SecurityContextHolder.getContext().getAuthentication().getName();
+            }
+
             // 3. Retrieve show details
             Show show = showRepository.findByPublicId(bookingRequest.getShowPublicId())
                     .orElseThrow(() -> new RuntimeException(ApiResponseMessage.SHOW_NOT_FOUND));
@@ -121,7 +127,7 @@ public class BookingServiceImpl implements BookingService {
             //    - Seat MUST be in HELD state
             //    - Seat MUST be held by the SAME user who is doing this booking
             //    - Seat hold MUST NOT be expired
-            if (!areSeatsAvailableForBooking(showSeats)) {
+            if (!areSeatsAvailableForBooking(showSeats, bookingUserIdentifier)) {
                 return buildErrorResponse(HttpStatus.CONFLICT,
                         "One or more seats are not available for booking or not held by this user");
             }
@@ -580,19 +586,11 @@ public class BookingServiceImpl implements BookingService {
      * - Seat hold must NOT be expired (expiresAt > now)
      * - Seat must be held by SAME user who is confirming booking
      *
-     * We derive the "current user" identifier from Spring Security's Authentication name,
-     * which should be the same identifier used as `reservedBy` in seat hold.
+     * @param showSeats list of seats to be booked
+     * @param bookingUserIdentifier identifier of current user (e.g. email / username from SecurityContext)
      */
-    private boolean areSeatsAvailableForBooking(List<ShowSeat> showSeats) {
+    private boolean areSeatsAvailableForBooking(List<ShowSeat> showSeats, String bookingUserIdentifier) {
         LocalDateTime now = LocalDateTime.now();
-
-        // This should match what you use in SeatStateEvent.reservedBy
-        String bookingUserIdentifier = null;
-        if (SecurityContextHolder.getContext().getAuthentication() != null) {
-            bookingUserIdentifier = SecurityContextHolder.getContext().getAuthentication().getName();
-        }
-
-        final String finalBookingUserIdentifier = bookingUserIdentifier;
 
         return showSeats.stream().allMatch(seat -> {
             // Must be in HELD state
@@ -610,12 +608,12 @@ public class BookingServiceImpl implements BookingService {
             }
 
             // Must be held by the same user
-            if (finalBookingUserIdentifier == null ||
+            if (bookingUserIdentifier == null ||
                     seat.getReservedBy() == null ||
-                    !seat.getReservedBy().equals(finalBookingUserIdentifier)) {
+                    !seat.getReservedBy().equals(bookingUserIdentifier)) {
 
                 log.warn("Seat held by different user - Seat: {}, HeldBy: {}, BookingBy: {}",
-                        seat.getSeatPublicId(), seat.getReservedBy(), finalBookingUserIdentifier);
+                        seat.getSeatPublicId(), seat.getReservedBy(), bookingUserIdentifier);
                 return false;
             }
 

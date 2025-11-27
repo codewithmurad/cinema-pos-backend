@@ -156,7 +156,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     @Transactional
     public void releaseSeat(String seatPublicId, String showPublicId, String reservedBy) {
 
-        log.info("ReleaseSeat | Show: {}, Seat: {}, RequestedBy: {}", showPublicId, seatPublicId, reservedBy);
+    	log.info("ReleaseSeat | Show: {}, Seat: {}, RequestedBy: {}", showPublicId, seatPublicId, reservedBy);
 
         // 1. Fetch the seat
         Optional<ShowSeat> seatOpt = showSeatRepository.findByPublicId(seatPublicId);
@@ -167,15 +167,11 @@ public class SeatHoldServiceImpl implements SeatHoldService {
 
         ShowSeat seat = seatOpt.get();
 
-        // 2. SECURITY VALIDATION  
-        // Prevent counter A from releasing counter B's held seat
-        if (seat.getReservedBy() != null
-                && reservedBy != null
-                && !reservedBy.equals(seat.getReservedBy())) {
-
-            log.warn("Unauthorized seat release attempt - HeldBy: {}, RequestedBy: {}",
+        // 2. 🔒 SECURITY: Only the same user who held the seat can release it
+        // Check if reservedBy (email) matches the one who originally held the seat
+        if (seat.getReservedBy() == null || !seat.getReservedBy().equals(reservedBy)) {
+            log.warn("Unauthorized seat release attempt - Seat held by: {}, Requested by: {}",
                     seat.getReservedBy(), reservedBy);
-
             throw new RuntimeException("Cannot release seat held by another user");
         }
 
@@ -283,7 +279,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     // ======================================================================================
     // 6. AUTO RELEASE EXPIRED SEATS — RUNS EVERY 30 SECONDS
     // ======================================================================================
-    @Scheduled(fixedRate = 30000)
+    @Scheduled(fixedRate = 120000)
     @Transactional
     public void checkExpiredHolds() {
 
