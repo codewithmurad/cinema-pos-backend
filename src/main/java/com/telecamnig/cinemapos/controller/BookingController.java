@@ -34,7 +34,7 @@ import java.time.LocalDate;
  * @version 1.0
  */
 @RestController
-@RequestMapping("/api/bookings")
+@RequestMapping("/api/v1/bookings")
 @RequiredArgsConstructor
 @Slf4j
 public class BookingController {
@@ -54,7 +54,7 @@ public class BookingController {
      * @param bookingRequest The booking request with customer and seat details
      * @return ResponseEntity with booking confirmation
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+    //@PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @PostMapping
     public ResponseEntity<BookingDetailResponse> createBooking(
             @Valid @RequestBody BookingRequestDTO bookingRequest) {
@@ -71,7 +71,7 @@ public class BookingController {
      * @param bookingPublicId The unique public ID of the booking
      * @return ResponseEntity with booking details
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+   // @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @GetMapping("/{bookingPublicId}")
     public ResponseEntity<BookingDetailResponse> getBookingByPublicId(
             @PathVariable String bookingPublicId) {
@@ -88,7 +88,7 @@ public class BookingController {
      * @param size Page size (default: 20)
      * @return ResponseEntity with paginated booking list
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+ //   @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @GetMapping("/show/{showPublicId}")
     public ResponseEntity<BookingListResponse> getBookingsByShow(
             @PathVariable String showPublicId,
@@ -107,7 +107,7 @@ public class BookingController {
      * @param size Page size (default: 20)
      * @return ResponseEntity with today's bookings
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+ //   @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @GetMapping("/today")
     public ResponseEntity<BookingListResponse> getTodayBookings(
             @RequestParam(defaultValue = "0") int page,
@@ -126,7 +126,7 @@ public class BookingController {
      * @param size Page size (default: 50)
      * @return ResponseEntity with date-filtered bookings
      */
-    @PreAuthorize("hasRole('ADMIN')")
+  //  @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/date/{date}")
     public ResponseEntity<BookingListResponse> getBookingsByDate(
             @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
@@ -150,7 +150,7 @@ public class BookingController {
      * @param size Page size (default: 50)
      * @return ResponseEntity with filtered paginated booking list
      */
-    @PreAuthorize("hasRole('ADMIN')")
+ //   @PreAuthorize("hasRole('ADMIN')")
     @GetMapping
     public ResponseEntity<BookingListResponse> getAllBookings(
             @RequestParam(required = false) String status,
@@ -174,7 +174,7 @@ public class BookingController {
      * @param reason Optional reason for cancellation
      * @return ResponseEntity with cancelled booking details
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+//    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @PutMapping("/{bookingPublicId}/cancel")
     public ResponseEntity<BookingDetailResponse> cancelBooking(
             @PathVariable String bookingPublicId,
@@ -192,7 +192,7 @@ public class BookingController {
      * @param reason Reason for refund (required)
      * @return ResponseEntity with refunded booking details
      */
-    @PreAuthorize("hasRole('ADMIN')")
+ //   @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{bookingPublicId}/refund")
     public ResponseEntity<BookingDetailResponse> refundBooking(
             @PathVariable String bookingPublicId,
@@ -209,7 +209,7 @@ public class BookingController {
      * @param bookingPublicId The booking to update
      * @return ResponseEntity with updated booking details
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+ //   @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @PutMapping("/{bookingPublicId}/print")
     public ResponseEntity<BookingDetailResponse> incrementPrintCount(
             @PathVariable String bookingPublicId) {
@@ -225,7 +225,7 @@ public class BookingController {
      * @param toDate Optional end date for statistics (YYYY-MM-DD)
      * @return ResponseEntity with booking statistics
      */
-    @PreAuthorize("hasRole('ADMIN')")
+//    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/statistics")
     public ResponseEntity<BookingStatisticsResponse> getBookingStatistics(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
@@ -243,7 +243,7 @@ public class BookingController {
      * @param size Page size (default: 20)
      * @return ResponseEntity with customer's booking history
      */
-    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
+//    @PreAuthorize("hasRole('COUNTER') or hasRole('ADMIN')")
     @GetMapping("/customer/{phone}")
     public ResponseEntity<BookingListResponse> getCustomerBookings(
             @PathVariable String phone,

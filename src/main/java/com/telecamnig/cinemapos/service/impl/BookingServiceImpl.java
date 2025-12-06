@@ -3,6 +3,7 @@ package com.telecamnig.cinemapos.service.impl;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -13,7 +14,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -26,6 +26,7 @@ import com.telecamnig.cinemapos.dto.BookingResponseDTO;
 import com.telecamnig.cinemapos.dto.BookingStatisticsResponse;
 import com.telecamnig.cinemapos.dto.PaginationInfo;
 import com.telecamnig.cinemapos.dto.PaymentMethodStats;
+import com.telecamnig.cinemapos.dto.SeatStateEvent;
 import com.telecamnig.cinemapos.entity.Booking;
 import com.telecamnig.cinemapos.entity.Show;
 import com.telecamnig.cinemapos.entity.ShowSeat;
@@ -40,6 +41,7 @@ import com.telecamnig.cinemapos.utility.ApiResponseMessage;
 import com.telecamnig.cinemapos.utility.Constants.BookingStatus;
 import com.telecamnig.cinemapos.utility.Constants.PaymentMode;
 import com.telecamnig.cinemapos.utility.Constants.ShowSeatState;
+import com.telecamnig.cinemapos.utility.Constants.ShowStatus;
 import com.telecamnig.cinemapos.websocket.WebSocketService;
 
 import lombok.RequiredArgsConstructor;
@@ -99,16 +101,16 @@ public class BookingServiceImpl implements BookingService {
             }
 
             // 2. Get current authenticated user (counter staff)
-            User currentUser = getCurrentUser();
+            User currentUser = getCurrentUser(bookingRequest.getBookedByUserEmail());
             if (currentUser == null) {
-                return buildErrorResponse(HttpStatus.UNAUTHORIZED, ApiResponseMessage.UNAUTHORIZED_ACCESS);
+                return buildErrorResponse(HttpStatus.UNAUTHORIZED, "User not found");
             }
 
             // This identifier MUST match what you use as `reservedBy`
-            String bookingUserIdentifier = null;
-            if (SecurityContextHolder.getContext().getAuthentication() != null) {
-                bookingUserIdentifier = SecurityContextHolder.getContext().getAuthentication().getName();
-            }
+//            String bookingUserIdentifier = null;
+//            if (SecurityContextHolder.getContext().getAuthentication() != null) {
+//                bookingUserIdentifier = SecurityContextHolder.getContext().getAuthentication().getName();
+//            }
 
             // 3. Retrieve show details
             Show show = showRepository.findByPublicId(bookingRequest.getShowPublicId())
@@ -127,7 +129,7 @@ public class BookingServiceImpl implements BookingService {
             //    - Seat MUST be in HELD state
             //    - Seat MUST be held by the SAME user who is doing this booking
             //    - Seat hold MUST NOT be expired
-            if (!areSeatsAvailableForBooking(showSeats, bookingUserIdentifier)) {
+            if (!areSeatsAvailableForBooking(showSeats, currentUser.getEmailId())) {
                 return buildErrorResponse(HttpStatus.CONFLICT,
                         "One or more seats are not available for booking or not held by this user");
             }
@@ -141,7 +143,7 @@ public class BookingServiceImpl implements BookingService {
             );
 
             // 9. Update show seat states to SOLD and confirm holds
-            updateShowSeatStates(showSeats, bookings.get(0).getId());
+            updateShowSeatStates(showSeats, bookings.get(0));
 
             // 10. Broadcast booking confirmation to all POS systems
             broadcastBookingConfirmation(bookings.get(0), showSeats);
@@ -569,7 +571,7 @@ public class BookingServiceImpl implements BookingService {
      * Throws exception if any seat is invalid or not found.
      */
     private List<ShowSeat> validateAndGetShowSeats(List<String> seatPublicIds, Long showId) {
-        List<ShowSeat> showSeats = showSeatRepository.findByShowIdAndSeatPublicIds(showId, seatPublicIds);
+        List<ShowSeat> showSeats = showSeatRepository.findByShowIdAndPublicIds(showId, seatPublicIds);
         
         if (showSeats.size() != seatPublicIds.size()) {
             throw new RuntimeException("One or more seats not found for this show");
@@ -625,10 +627,19 @@ public class BookingServiceImpl implements BookingService {
      * Checks if show is active and in the future.
      */
     private boolean isShowActiveAndFuture(Show show) {
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime cutoff = show.getStartAt()
-                .minusMinutes(MIN_MINUTES_BEFORE_SHOW_FOR_BOOKING);
-        return show.getStatus() == 1 && cutoff.isAfter(now);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime cutoff = show.getStartAt().minusMinutes(MIN_MINUTES_BEFORE_SHOW_FOR_BOOKING);
+        
+        // ✅ Allow both SCHEDULED and RUNNING shows
+        boolean isBookableStatus = 
+            show.getStatus() == ShowStatus.SCHEDULED.getCode() || 
+            show.getStatus() == ShowStatus.RUNNING.getCode();
+        
+        boolean isFuture = cutoff.isAfter(now);
+        
+        System.out.println("DEBUG - Status: " + show.getStatus() + " | Bookable: " + isBookableStatus + " | Future: " + isFuture);
+        
+        return isBookableStatus && isFuture;
     }
 
     /**
@@ -676,18 +687,43 @@ public class BookingServiceImpl implements BookingService {
     }
 
     /**
-     * Updates show seat states to SOLD and confirms seat holds.
+     * Updates show seat states to SOLD, clears hold info and confirms seat holds.
+     * Also broadcasts seat state change so all POS seat maps update to "BOOKED".
      */
-    private void updateShowSeatStates(List<ShowSeat> showSeats, Long bookingId) {
+    private void updateShowSeatStates(List<ShowSeat> showSeats, Booking booking) {
+
+        String showPublicId = booking.getShowPublicId();
+        LocalDateTime now = LocalDateTime.now();
+
         for (ShowSeat showSeat : showSeats) {
+
+            // 1. Mark as SOLD and link to booking
             showSeat.setState(ShowSeatState.SOLD.getLabel());
-            showSeat.setConfirmedBookingId(bookingId);
+            showSeat.setConfirmedBookingId(booking.getId());
+
+            // 2. Clear temporary hold data so scheduler will never touch it again
+            showSeat.setReservedBy(null);
+            showSeat.setReservedAt(null);
+            showSeat.setExpiresAt(null);
+
             showSeatRepository.save(showSeat);
-            
-            // Confirm seat hold (remove from temporary hold tracking)
+
+            // 3. Remove from in-memory hold tracking (SeatHoldService)
             seatHoldService.confirmSeatHold(showSeat.getSeatPublicId());
+
+            // 4. Broadcast seat SOLD event so all POS clients update UI
+            SeatStateEvent seatSoldEvent = SeatStateEvent.builder()
+                    .showPublicId(showPublicId)
+                    .seatPublicId(showSeat.getPublicId())
+                    .state(ShowSeatState.SOLD.getLabel())
+                    .eventType("SEAT_SOLD")
+                    .timestamp(now)
+                    .build();
+
+            webSocketService.broadcastSeatUpdate(showPublicId, seatSoldEvent);
         }
     }
+
 
     /**
      * Releases seats associated with a booking (on cancellation/refund).
@@ -774,9 +810,8 @@ public class BookingServiceImpl implements BookingService {
     /**
      * Retrieves current authenticated user from security context.
      */
-    private User getCurrentUser() {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        return userRepository.findByEmailId(username).orElse(null);
+    private User getCurrentUser(String userEmail) {
+        return userRepository.findByEmailId(userEmail).orElse(null);
     }
 
     /**

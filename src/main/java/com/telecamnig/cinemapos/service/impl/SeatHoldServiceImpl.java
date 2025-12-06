@@ -45,18 +45,8 @@ import lombok.extern.slf4j.Slf4j;
  *  BookingService will confirm seats.
  *  THIS service manages temporary seat holds BEFORE booking.
  *
- *  FLOW:
- *  -----
- *  1. POS selects a seat → WebSocket → /app/seats/hold → this service  
- *  2. Seat is marked HELD in DB  
- *  3. Event is broadcast → all counters update live  
- *  4. If user deselects → releaseSeat()  
- *  5. If booking completes → confirmSeatHold()  
- *  6. If 5 mins pass → auto release (scheduled cleanup)  
- *
  * ================================================================================
  */
-
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -77,14 +67,6 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     // ======================================================================================
     // 1. HOLD SEAT
     // ======================================================================================
-    /**
-     * Hold a seat temporarily for a POS counter.
-     *
-     * @param sessionId   WebSocket session ID
-     * @param showPublicId The show identifier
-     * @param seatPublicId The seat identifier
-     * @param reservedBy   User who selected the seat (counter staff name)
-     */
     @Override
     @Transactional
     public void holdSeat(String sessionId, String showPublicId, String seatPublicId, String reservedBy) {
@@ -144,19 +126,13 @@ public class SeatHoldServiceImpl implements SeatHoldService {
 
 
     // ======================================================================================
-    // 2. RELEASE SEAT
+    // 2. RELEASE SEAT (manual/UI)
     // ======================================================================================
-    /**
-     * Releases a seat manually or from UI.
-     *
-     * VALIDATION:
-     * Only the same counter user holding the seat can release it.
-     */
     @Override
     @Transactional
     public void releaseSeat(String seatPublicId, String showPublicId, String reservedBy) {
 
-    	log.info("ReleaseSeat | Show: {}, Seat: {}, RequestedBy: {}", showPublicId, seatPublicId, reservedBy);
+        log.info("ReleaseSeat | Show: {}, Seat: {}, RequestedBy: {}", showPublicId, seatPublicId, reservedBy);
 
         // 1. Fetch the seat
         Optional<ShowSeat> seatOpt = showSeatRepository.findByPublicId(seatPublicId);
@@ -167,8 +143,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
 
         ShowSeat seat = seatOpt.get();
 
-        // 2. 🔒 SECURITY: Only the same user who held the seat can release it
-        // Check if reservedBy (email) matches the one who originally held the seat
+        // 2. SECURITY: Only the same user who held the seat can release it
         if (seat.getReservedBy() == null || !seat.getReservedBy().equals(reservedBy)) {
             log.warn("Unauthorized seat release attempt - Seat held by: {}, Requested by: {}",
                     seat.getReservedBy(), reservedBy);
@@ -204,9 +179,6 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     // ======================================================================================
     // 3. RELEASE ALL SEATS WHEN A SESSION DISCONNECTS
     // ======================================================================================
-    /**
-     * Auto-release seats when the POS browser/tab is closed.
-     */
     @Override
     public void releaseSeatsBySession(String sessionId) {
 
@@ -223,6 +195,15 @@ public class SeatHoldServiceImpl implements SeatHoldService {
             if (seatOpt.isEmpty()) continue;
 
             ShowSeat seat = seatOpt.get();
+
+            // 🔐 SAFETY: only auto-release seats that are STILL HELD
+            if (!ShowSeatState.HELD.getLabel().equals(seat.getState())) {
+                log.debug("Skipping auto release for seat {} in session {} because state is {}",
+                        seat.getSeatPublicId(), sessionId, seat.getState());
+                continue;
+            }
+
+            log.info("Auto-releasing seat {} (session disconnect) HELD → AVAILABLE", seat.getSeatPublicId());
 
             seat.setState(ShowSeatState.AVAILABLE.getLabel());
             seat.setReservedBy(null);
@@ -246,6 +227,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     }
 
 
+
     // ======================================================================================
     // 4. CONFIRM SEAT HOLD (after booking)
     // ======================================================================================
@@ -254,6 +236,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
         sessionHeldSeats.values().forEach(list -> list.remove(seatPublicId));
         log.info("Seat confirmed (sold), removing hold tracking — {}", seatPublicId);
     }
+
 
 
     // ======================================================================================
@@ -277,7 +260,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
 
 
     // ======================================================================================
-    // 6. AUTO RELEASE EXPIRED SEATS — RUNS EVERY 30 SECONDS
+    // 6. AUTO RELEASE EXPIRED SEATS — RUNS EVERY 120 SECONDS
     // ======================================================================================
     @Scheduled(fixedRate = 120000)
     @Transactional
@@ -287,26 +270,47 @@ public class SeatHoldServiceImpl implements SeatHoldService {
 
         List<ShowSeat> expiredSeats = showSeatRepository.findExpiredHeldSeats(LocalDateTime.now());
 
-        if (expiredSeats.isEmpty()) return;
+        if (expiredSeats.isEmpty()) {
+            return;
+        }
 
-        log.info("Found {} expired seats. Releasing...", expiredSeats.size());
+        log.info("Found {} seats with expired hold times. Evaluating...", expiredSeats.size());
 
         for (ShowSeat seat : expiredSeats) {
 
-            seat.setState(ShowSeatState.AVAILABLE.getLabel());
-            seat.setReservedBy(null);
-            seat.setReservedAt(null);
-            seat.setExpiresAt(null);
+            // 🔁 VERY IMPORTANT: reload latest state from DB to avoid overwriting SOLD
+            Optional<ShowSeat> freshOpt = showSeatRepository.findById(seat.getId());
 
-            showSeatRepository.save(seat);
+            if (freshOpt.isEmpty()) {
+                continue;
+            }
 
-            sessionHeldSeats.values().forEach(list -> list.remove(seat.getSeatPublicId()));
+            ShowSeat freshSeat = freshOpt.get();
 
-            String showPublicId = resolveShowPublicId(seat.getShowId());
+            // ✅ Only auto-release if it is STILL HELD *right now* in DB
+            if (!ShowSeatState.HELD.getLabel().equals(freshSeat.getState())) {
+                log.debug("Skipping seat {} in expired-hold cleanup because current state is {}",
+                        freshSeat.getSeatPublicId(), freshSeat.getState());
+                continue;
+            }
+
+            log.info("Releasing expired held seat {}", freshSeat.getSeatPublicId());
+
+            freshSeat.setState(ShowSeatState.AVAILABLE.getLabel());
+            freshSeat.setReservedBy(null);
+            freshSeat.setReservedAt(null);
+            freshSeat.setExpiresAt(null);
+
+            showSeatRepository.save(freshSeat);
+
+            // remove from in-memory tracking
+            sessionHeldSeats.values().forEach(list -> list.remove(freshSeat.getSeatPublicId()));
+
+            String showPublicId = resolveShowPublicId(freshSeat.getShowId());
 
             SeatStateEvent event = SeatStateEvent.builder()
                     .showPublicId(showPublicId)
-                    .seatPublicId(seat.getSeatPublicId())
+                    .seatPublicId(freshSeat.getSeatPublicId())
                     .state(ShowSeatState.AVAILABLE.getLabel())
                     .eventType("SEAT_RELEASED")
                     .timestamp(LocalDateTime.now())
@@ -315,6 +319,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
             webSocketService.broadcastSeatUpdate(showPublicId, event);
         }
     }
+
 
 
     // ======================================================================================

@@ -44,5 +44,8 @@ public class BookingRequestDTO {
     
     @Size(max = 500, message = "Notes must not exceed 500 characters")
     private String notes;
+    
+    @NotBlank(message = "Booked by user is required")
+    private String bookedByUserEmail;
 
 }
