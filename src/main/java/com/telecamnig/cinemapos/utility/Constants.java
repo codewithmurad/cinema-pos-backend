@@ -642,11 +642,7 @@ public class Constants {
 
     public enum PaymentMode {
         CASH(0, "CASH"),
-        POS(1, "POS"),
-        TRANSFER(2, "TRANSFER"), 
-        USSD(3, "USSD"),
-        ONLINE(4, "ONLINE"),
-        OTHER(5, "OTHER");
+        POS(1, "POS");
 
         private final int code;
         private final String label;

@@ -17,9 +17,6 @@ public class UpdateMovieRequest {
     @Size(max = 200, message = "title must be at most 200 characters")
     private String title;
 
-    @Size(max = 200, message = "slug must be at most 200 characters")
-    private String slug;
-
     @Size(max = 5000, message = "description must be at most 5000 characters")
     private String description;
 

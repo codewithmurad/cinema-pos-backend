@@ -16,6 +16,8 @@ import lombok.NoArgsConstructor;
 public class BookingResponseDTO {
     
 	private String bookingPublicId;
+	
+    private String bookingGroupRef;
     
 	private String showPublicId;
     
@@ -23,13 +25,11 @@ public class BookingResponseDTO {
     
 	private String screenName;
     
-	private String customerName;
+	private BigDecimal baseAmount;
+	
+    private BigDecimal vatAmount;
     
-	private String customerPhone;
-    
-	private String customerEmail;
-    
-	private BigDecimal totalAmount;
+    private BigDecimal totalAmount;
     
 	private String paymentMode;
     

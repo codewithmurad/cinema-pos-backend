@@ -1,10 +1,10 @@
 package com.telecamnig.cinemapos.controller;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -161,27 +161,35 @@ public class ShowController {
      * GET /api/v1/shows/running
      * 
      * Retrieves all currently running shows (started but not yet completed).
+     * 
      * This API is used by:
      * - Counter staff for active show monitoring
      * - Admin for real-time operations
      * - Concession staff for peak time analysis
      * 
-     * Shows are filtered to include only RUNNING status with:
-     * - Start time <= current time
-     * - End time > current time
+     * Filters:
+     * - By movie: optional query param `moviePublicId`
      * 
-     * Results are ordered by screen for easy staff assignment.
+     * Pagination:
+     * - `page` (default 0)
+     * - `size` (default 20, max 100 in service validation)
+     * 
+     * Ordering:
+     * - Shows ending soonest first (to help staff prioritize)
+     * - Secondary sort by screen for staff assignment
      * 
      * Authentication: Required (All authenticated users)
-     * 
-     * @return ShowsListResponse with list of running shows
      */
-//    @PreAuthorize("isAuthenticated()")
+    // @PreAuthorize("isAuthenticated()")
     @GetMapping("/running")
-    public ResponseEntity<ShowsListResponse> getRunningShows() {
-        return showService.getRunningShows();
+    public ResponseEntity<ShowsListResponse> getRunningShows(
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "size", defaultValue = "20") int size,
+            @RequestParam(value = "moviePublicId", required = false) String moviePublicId) {
+        
+        return showService.getRunningShows(page, size, moviePublicId);
     }
-
+    
     /**
      * GET /api/v1/shows/active
      * 
@@ -193,18 +201,35 @@ public class ShowController {
      * Combines results from upcoming and running shows for comprehensive view.
      * Essential for daily operations and staff scheduling.
      * 
-     * Authentication: Required (All authenticated users)
+     * Filters:
+     * - By movie name/ID: optional `moviePublicId` or `movieName` (partial match)
+     * - By date: optional `showDate` (today/future)
+     * - By screen: optional `screenId` or `screenCode`
+     * - By time range: optional `startAfter` and `endBefore`
      * 
-     * @param page Page number for pagination (default: 0)
-     * @param size Page size for pagination (default: 50)
-     * @return ShowsListResponse with list of active shows
+     * Pagination:
+     * - `page` (default 0)
+     * - `size` (default 50, max 100)
+     * 
+     * Authentication: Required (All authenticated users)
      */
-//    @PreAuthorize("isAuthenticated()")
+//        @PreAuthorize("isAuthenticated()")
     @GetMapping("/active")
     public ResponseEntity<ShowsListResponse> getActiveShows(
             @RequestParam(value = "page", defaultValue = "0") int page,
-            @RequestParam(value = "size", defaultValue = "50") int size) {
-        return showService.getActiveShows(page, size);
+            @RequestParam(value = "size", defaultValue = "50") int size,
+            @RequestParam(value = "moviePublicId", required = false) String moviePublicId,
+            @RequestParam(value = "movieName", required = false) String movieName,
+            @RequestParam(value = "screenId", required = false) Long screenId,
+            @RequestParam(value = "showDate", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate showDate,
+            @RequestParam(value = "startAfter", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startAfter,
+            @RequestParam(value = "endBefore", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endBefore) {
+        
+        return showService.getActiveShows(page, size, moviePublicId, movieName, screenId, 
+                                         showDate, startAfter, endBefore);
     }
 
     /**
@@ -216,23 +241,29 @@ public class ShowController {
      * - Historical performance analysis
      * - Audit and compliance requirements
      * 
-     * Shows are filtered to include COMPLETED and CANCELLED status.
-     * Results are ordered by start time (descending) for recent first.
+     * Filters:
+     * - By status: optional `status` (2=COMPLETED, 3=CANCELLED) - if not provided, returns both
+     * - By movie: optional `moviePublicId`
+     * - By date: optional `showDate` (ISO-8601 format) - exact date match
+     * 
+     * Pagination:
+     * - `page` (default 0)
+     * - `size` (default 20, max 100)
      * 
      * Admin only access due to sensitive historical data.
-     * 
      * Authentication: Required (Admin role only)
-     * 
-     * @param page Page number for pagination (default: 0)
-     * @param size Page size for pagination (default: 20)
-     * @return ShowsListResponse with list of historical shows
      */
-//    @PreAuthorize("hasRole('ADMIN')")
+//        @PreAuthorize("hasRole('ADMIN')")
     @GetMapping("/history")
     public ResponseEntity<ShowsListResponse> getShowHistory(
             @RequestParam(value = "page", defaultValue = "0") int page,
-            @RequestParam(value = "size", defaultValue = "20") int size) {
-        return showService.getShowHistory(page, size);
+            @RequestParam(value = "size", defaultValue = "20") int size,
+            @RequestParam(value = "status", required = false) Integer status,
+            @RequestParam(value = "moviePublicId", required = false) String moviePublicId,
+            @RequestParam(value = "showDate", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate showDate) {
+        
+        return showService.getShowHistory(page, size, status, moviePublicId, showDate);
     }
     
  // ==================== FILTERED SEARCH APIS ====================

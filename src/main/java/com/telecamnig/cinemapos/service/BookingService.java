@@ -89,6 +89,16 @@ public interface BookingService {
     ResponseEntity<BookingDetailResponse> cancelBooking(String bookingPublicId, String reason);
     
     /**
+     * Cancel an active booking GROUP.
+     * Cancels all seats booked together using bookingGroupRef.
+     *
+     * @param bookingGroupRef group reference of booking
+     * @param reason optional cancel reason
+     * @return response with cancelled booking details
+     */
+    ResponseEntity<BookingDetailResponse> cancelBookingGroup(String bookingGroupRef, String reason);
+    
+    /**
      * Process refund for a booking.
      * Updates booking status to REFUNDED and releases seats.
      * Admin only operation.

@@ -1,6 +1,7 @@
 package com.telecamnig.cinemapos.service.impl;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -79,6 +81,9 @@ public class BookingServiceImpl implements BookingService {
     public static final int MAX_SEATS_PER_BOOKING = 10; // Maximum seats per booking
     public static final int MIN_MINUTES_BEFORE_SHOW_FOR_BOOKING = 0; // No bookings if show started
 
+    @Value("${cinema.vat.percentage}")
+    private BigDecimal vatPercentage;
+    
     // ========== MAIN BOOKING METHODS ==========
 
     @Override
@@ -134,25 +139,40 @@ public class BookingServiceImpl implements BookingService {
                         "One or more seats are not available for booking or not held by this user");
             }
 
-            // 7. Calculate total booking amount
-            BigDecimal totalAmount = calculateTotalAmount(showSeats);
+            // 7. FINAL SAFETY CHECK (REPLACES DB UNIQUE CONSTRAINT)
+            for (ShowSeat showSeat : showSeats) {
+                boolean alreadyIssued =
+                    bookingRepository.existsByShowPublicIdAndSeatPublicIdAndStatus(
+                        bookingRequest.getShowPublicId(),
+                        showSeat.getSeatPublicId(),
+                        BookingStatus.ISSUED.getLabel()
+                    );
 
+                if (alreadyIssued) {
+                    return buildErrorResponse(
+                        HttpStatus.CONFLICT,
+                        "Seat already booked: " + showSeat.getSeatLabel()
+                    );
+                }
+            }
+  
             // 8. Create booking records and update database
             List<Booking> bookings = createBookingRecords(
-                    bookingRequest, show, showSeats, totalAmount, currentUser.getId()
+                    bookingRequest, show, showSeats, currentUser.getId()
             );
+
 
             // 9. Update show seat states to SOLD and confirm holds
             updateShowSeatStates(showSeats, bookings.get(0));
 
             // 10. Broadcast booking confirmation to all POS systems
-            broadcastBookingConfirmation(bookings.get(0), showSeats);
+            broadcastBookingConfirmation(bookings, showSeats);
 
             // 11. Prepare and return success response
             BookingResponseDTO bookingResponse = convertToBookingResponseDTO(bookings.get(0), showSeats);
 
-            log.info("Booking created successfully - Booking: {}, Show: {}, Amount: {}, Seats: {}", 
-                    bookings.get(0).getPublicId(), show.getPublicId(), totalAmount, 
+            log.info("Booking created successfully - Booking: {}, Show: {}, Seats: {}", 
+                    bookings.get(0).getPublicId(), show.getPublicId(), 
                     showSeats.stream().map(ShowSeat::getSeatLabel).collect(Collectors.toList()));
 
             return ResponseEntity.ok(BookingDetailResponse.builder()
@@ -395,6 +415,72 @@ public class BookingServiceImpl implements BookingService {
             return buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to cancel booking");
         }
     }
+    
+    @Override
+    @Transactional
+    public ResponseEntity<BookingDetailResponse> cancelBookingGroup(String bookingGroupRef, String reason) {
+        try {
+            if (!StringUtils.hasText(bookingGroupRef)) {
+                return buildErrorResponse(HttpStatus.BAD_REQUEST, ApiResponseMessage.INVALID_INPUT);
+            }
+
+            // 1. Fetch all bookings in the group
+            List<Booking> bookings = bookingRepository.findByBookingGroupRef(bookingGroupRef);
+
+            if (bookings.isEmpty()) {
+                return buildErrorResponse(HttpStatus.NOT_FOUND, "Booking group not found");
+            }
+
+            // 2. Validate show time (same for all bookings)
+            Booking firstBooking = bookings.get(0);
+            if (firstBooking.getShowStartTime().isBefore(LocalDateTime.now())) {
+                return buildErrorResponse(
+                        HttpStatus.BAD_REQUEST,
+                        "Cannot cancel booking after show has started"
+                );
+            }
+
+            // 3. Cancel all bookings in group
+            for (Booking booking : bookings) {
+
+                if (!booking.isActive()) {
+                    continue; // already cancelled/refunded
+                }
+
+                booking.cancel(reason);
+                bookingRepository.save(booking);
+
+                // 4. Release seat
+                releaseSeatsForBooking(booking.getId());
+            }
+
+            log.info("Booking group cancelled successfully - GroupRef: {}, Seats: {}",
+                    bookingGroupRef, bookings.size());
+
+            // 5. Prepare response (use first booking for response)
+            List<ShowSeat> showSeats =
+                    showSeatRepository.findByConfirmedBookingId(firstBooking.getId());
+
+            BookingResponseDTO bookingResponse =
+                    convertToBookingResponseDTO(firstBooking, showSeats);
+
+            return ResponseEntity.ok(
+                    BookingDetailResponse.builder()
+                            .success(true)
+                            .message("Booking cancelled successfully")
+                            .booking(bookingResponse)
+                            .build()
+            );
+
+        } catch (Exception e) {
+            log.error("Error cancelling booking group: {}", bookingGroupRef, e);
+            return buildErrorResponse(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Failed to cancel booking group"
+            );
+        }
+    }
+
 
     @Override
     @Transactional
@@ -531,6 +617,17 @@ public class BookingServiceImpl implements BookingService {
     }
 
     // ========== PRIVATE HELPER METHODS ==========
+    
+    /**
+     * Calculates VAT for a given base price.
+     * Example: 1000 * 7.5% = 75
+     */
+    private BigDecimal calculateVat(BigDecimal basePrice) {
+        return basePrice
+                .multiply(vatPercentage)
+                .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+    }
+
 
     /**
      * Validates booking request parameters.
@@ -545,12 +642,6 @@ public class BookingServiceImpl implements BookingService {
         }
         if (bookingRequest.getSeatPublicIds() == null || bookingRequest.getSeatPublicIds().isEmpty()) {
             return buildErrorResponse(HttpStatus.BAD_REQUEST, "At least one seat must be selected");
-        }
-        if (!StringUtils.hasText(bookingRequest.getCustomerName())) {
-            return buildErrorResponse(HttpStatus.BAD_REQUEST, "Customer name is required");
-        }
-        if (!StringUtils.hasText(bookingRequest.getCustomerPhone())) {
-            return buildErrorResponse(HttpStatus.BAD_REQUEST, "Customer phone is required");
         }
         if (!StringUtils.hasText(bookingRequest.getPaymentMode())) {
             return buildErrorResponse(HttpStatus.BAD_REQUEST, "Payment mode is required");
@@ -643,48 +734,66 @@ public class BookingServiceImpl implements BookingService {
     }
 
     /**
-     * Calculates total booking amount from selected seats.
-     */
-    private BigDecimal calculateTotalAmount(List<ShowSeat> showSeats) {
-        return showSeats.stream()
-                .map(ShowSeat::getPrice)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    /**
      * Creates booking records in database.
      * Creates one booking per seat for individual tracking.
      */
-    private List<Booking> createBookingRecords(BookingRequestDTO bookingRequest, Show show, 
-                                             List<ShowSeat> showSeats, BigDecimal totalAmount, Long bookedByUserId) {
+    private List<Booking> createBookingRecords(
+            BookingRequestDTO bookingRequest,
+            Show show,
+            List<ShowSeat> showSeats,
+            Long bookedByUserId) {
         List<Booking> bookings = new ArrayList<>();
-        
+
+        // 🔑 Same reference for all seats booked together
+        String bookingGroupRef = UUID.randomUUID().toString();
+
         for (ShowSeat showSeat : showSeats) {
+
+            // 1️⃣ Base seat price (NO tax)
+            BigDecimal basePrice = showSeat.getPrice();
+
+            // 2️⃣ VAT calculation
+            BigDecimal vatAmount = calculateVat(basePrice);
+
+            // 3️⃣ Final amount customer paid
+            BigDecimal totalAmount = basePrice.add(vatAmount);
+
             Booking booking = Booking.builder()
                     .publicId(UUID.randomUUID().toString())
+
+                    // 🔗 Group reference (same for all seats in this booking)
+                    .bookingGroupRef(bookingGroupRef)
+
+                    // Show & seat references
                     .showPublicId(bookingRequest.getShowPublicId())
                     .seatPublicId(showSeat.getSeatPublicId())
+
+                    // Snapshot show data
                     .showStartTime(show.getStartAt())
                     .showEndTime(show.getEndAt())
-                    .screenName(show.getScreenPublicId()) // Would need screen name lookup
-                    .price(showSeat.getPrice())
+                    .screenName(show.getScreenPublicId())
+
+                    // 💰 Pricing snapshot
+                    .price(basePrice)          // base price
+                    .vatAmount(vatAmount)      // VAT
+                    .totalAmount(totalAmount)  // final paid amount
+
+                    // Payment & audit
                     .paymentMode(bookingRequest.getPaymentMode().toUpperCase())
                     .transactionReference(bookingRequest.getTransactionReference())
-                    .customerName(bookingRequest.getCustomerName())
-                    .customerPhone(bookingRequest.getCustomerPhone())
-                    .customerEmail(bookingRequest.getCustomerEmail())
                     .bookedByUserId(bookedByUserId)
                     .bookedAt(LocalDateTime.now())
                     .status(BookingStatus.ISSUED.getLabel())
                     .printCount(0)
                     .notes(bookingRequest.getNotes())
                     .build();
-            
+
             bookings.add(bookingRepository.save(booking));
         }
-        
+
         return bookings;
     }
+
 
     /**
      * Updates show seat states to SOLD, clears hold info and confirms seat holds.
@@ -731,50 +840,70 @@ public class BookingServiceImpl implements BookingService {
      */
     private void releaseSeatsForBooking(Long bookingId) {
         List<ShowSeat> showSeats = showSeatRepository.findByConfirmedBookingId(bookingId);
-        
+
         for (ShowSeat showSeat : showSeats) {
+
             showSeat.setState(ShowSeatState.AVAILABLE.getLabel());
             showSeat.setConfirmedBookingId(null);
+            showSeat.setReservedBy(null);
+            showSeat.setReservedAt(null);
+            showSeat.setExpiresAt(null);
+
             showSeatRepository.save(showSeat);
-            
-            // TODO (optional for prod):
-            // Broadcast seat release to all POS systems so UIs update in real-time
-            // You'd need showPublicId (can resolve from showRepository using showId).
+
+            // 🔥 BROADCAST seat release to ALL POS systems
+            String showPublicId = showRepository.findById(showSeat.getShowId())
+                    .map(Show::getPublicId)
+                    .orElse(null);
+
+            if (showPublicId != null) {
+                SeatStateEvent event = SeatStateEvent.builder()
+                        .showPublicId(showPublicId)
+                        .seatPublicId(showSeat.getPublicId())
+                        .state(ShowSeatState.AVAILABLE.getLabel())
+                        .eventType("SEAT_RELEASED")
+                        .timestamp(LocalDateTime.now())
+                        .build();
+
+                webSocketService.broadcastSeatUpdate(showPublicId, event);
+            }
         }
     }
+
 
     /**
      * Broadcasts booking confirmation to all POS systems.
      */
-    private void broadcastBookingConfirmation(Booking booking, List<ShowSeat> showSeats) {
+    private void broadcastBookingConfirmation(List<Booking> bookings, List<ShowSeat> showSeats) {
         try {
+            Booking booking = bookings.get(0); // representative booking
+
             List<String> seatLabels = showSeats.stream()
                     .map(ShowSeat::getSeatLabel)
                     .collect(Collectors.toList());
-            
-            // Calculate total amount for all seats (aggregation for multiple seats)
-            BigDecimal totalAmount = showSeats.stream()
-                    .map(ShowSeat::getPrice)
+
+            // ✅ CORRECT: sum of PAID AMOUNT (base + VAT)
+            BigDecimal totalAmount = bookings.stream()
+                    .map(Booking::getTotalAmount)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            
+
             BookingConfirmationEvent confirmationEvent = BookingConfirmationEvent.builder()
                     .bookingPublicId(booking.getPublicId())
                     .showPublicId(booking.getShowPublicId())
-                    .customerName(booking.getCustomerName())
                     .seatLabels(seatLabels)
-                    .totalAmount(totalAmount)  // Use aggregated amount
+                    .totalAmount(totalAmount)
                     .paymentMode(booking.getPaymentMode())
                     .timestamp(LocalDateTime.now())
-                    .bookedBy("Counter Staff")  // You can get this from user context
+                    .bookedBy("Counter Staff")
                     .build();
-            
+
             webSocketService.broadcastBookingConfirmation(confirmationEvent);
-            
+
         } catch (Exception e) {
-            log.error("Error broadcasting booking confirmation: {}", booking.getPublicId(), e);
-            // Don't throw exception - booking should still be created
+            log.error("Error broadcasting booking confirmation", e);
         }
     }
+
 
     /**
      * Calculates payment method statistics for the given period.
@@ -818,30 +947,37 @@ public class BookingServiceImpl implements BookingService {
      * Converts Booking entity to response DTO.
      */
     private BookingResponseDTO convertToBookingResponseDTO(Booking booking, List<ShowSeat> showSeats) {
+
         List<String> seatLabels = showSeats.stream()
                 .map(ShowSeat::getSeatLabel)
                 .collect(Collectors.toList());
-        
+
         return BookingResponseDTO.builder()
                 .bookingPublicId(booking.getPublicId())
+                .bookingGroupRef(booking.getBookingGroupRef())
+
                 .showPublicId(booking.getShowPublicId())
-                .movieTitle("Movie Title") // Would need movie lookup
+                .movieTitle("Movie Title") // TODO: lookup later
                 .screenName(booking.getScreenName())
-                .customerName(booking.getCustomerName())
-                .customerPhone(booking.getCustomerPhone())
-                .customerEmail(booking.getCustomerEmail())
-                .totalAmount(booking.getPrice())
+
+                // 💰 PRICING BREAKDOWN (FIXED)
+                .baseAmount(booking.getPrice())
+                .vatAmount(booking.getVatAmount())
+                .totalAmount(booking.getTotalAmount())
+
                 .paymentMode(booking.getPaymentMode())
                 .transactionReference(booking.getTransactionReference())
                 .status(booking.getStatus())
                 .bookedAt(booking.getBookedAt())
                 .showStartTime(booking.getShowStartTime())
                 .showEndTime(booking.getShowEndTime())
+
                 .seatLabels(seatLabels)
                 .printCount(booking.getPrintCount())
                 .qrCodeData(generateQRCodeData(booking))
                 .build();
     }
+
 
     /**
      * Generates QR code data for ticket printing.

@@ -563,44 +563,94 @@ public class ShowServiceImpl implements ShowService {
         }
     }
 
-
     @Override
     @Transactional(readOnly = true)
-    public ResponseEntity<ShowsListResponse> getRunningShows() {
-        /**
-         * Retrieves all currently running shows (started but not yet completed).
-         * Used by counter staff for active show monitoring and real-time operations.
-         */
-        
-        // 🔒 Step 1: Authentication check
-//        Authentication auth = getAuthenticatedUser();
-//        if (auth == null) {
-//            log.warn("Unauthorized access attempt to getRunningShows");
-//            return buildShowsUnauthorizedResponse();
-//        }
+    public ResponseEntity<ShowsListResponse> getRunningShows(
+            int page,
+            int size,
+            String moviePublicId
+    ) {
+        // 🔒 Step 1: Authentication check (same as upcoming shows)
+        // Authentication auth = getAuthenticatedUser();
+        // if (auth == null) {
+        //     log.warn("Unauthorized access attempt to getRunningShows");
+        //     return buildShowsUnauthorizedResponse();
+        // }
 
         try {
-            // Step 2: Fetch running shows (RUNNING status with current time within show duration)
-            LocalDateTime currentTime = LocalDateTime.now();
-            
-            List<Show> runningShows = showRepository.findRunningShows(currentTime);
+            // Step 2: Validate pagination parameters (SAME as upcoming shows)
+            if (page < 0) {
+                log.warn("Invalid page number provided: {}", page);
+                return buildShowsBadRequestResponse("Page number cannot be negative");
+            }
+            if (size <= 0 || size > 100) {
+                log.warn("Invalid page size provided: {}", size);
+                return buildShowsBadRequestResponse("Page size must be between 1 and 100");
+            }
 
-            // Step 3: Convert to DTOs
-            List<ShowListItemDto> showDtos = runningShows.stream()
+            // Step 3: Build pageable with ordering
+            // Primary: Shows ending soonest (to help staff prioritize)
+            // Secondary: By screen for staff assignment
+            Pageable pageable = PageRequest.of(
+                    page,
+                    size,
+                    Sort.by("endAt").ascending()
+                        .and(Sort.by("screenId").ascending())
+            );
+
+            LocalDateTime currentTime = LocalDateTime.now();
+
+            // Step 4: Resolve optional movie filter (SAME as upcoming shows)
+            Long movieId = null;
+            if (moviePublicId != null && !moviePublicId.isBlank()) {
+                String trimmed = moviePublicId.trim();
+                Optional<Movie> movieOpt = movieRepository.findByPublicId(trimmed);
+                if (movieOpt.isEmpty()) {
+                    log.warn("Invalid moviePublicId provided: {}", trimmed);
+                    return buildShowsBadRequestResponse("Invalid movie reference");
+                }
+                movieId = movieOpt.get().getId();
+            }
+
+            // Step 5: Execute repository search
+            Integer statusRunning = ShowStatus.RUNNING.getCode();
+            
+            Page<Show> showsPage = showRepository.searchRunningShows(
+                    statusRunning,
+                    currentTime,
+                    movieId,
+                    pageable
+            );
+
+            // Step 6: Convert entities to DTOs (SAME as upcoming shows)
+            List<ShowListItemDto> showDtos = showsPage.getContent().stream()
                     .map(this::convertToShowListItemDto)
                     .collect(Collectors.toList());
 
-            // Step 4: Build summary statistics
-            ShowsSummaryDto summary = buildRunningShowsSummary(runningShows);
+            // Step 7: Build summary statistics
+            ShowsSummaryDto summary = buildRunningShowsSummary(showsPage.getContent());
 
-            log.info("Retrieved {} currently running shows", showDtos.size());
+            log.info(
+                    "Retrieved {} running shows (page {} of {}) [moviePublicId={}]",
+                    showDtos.size(),
+                    page,
+                    showsPage.getTotalPages(),
+                    moviePublicId
+            );
 
-            return ResponseEntity.ok(ShowsListResponse.builder()
-                    .success(true)
-                    .message(ApiResponseMessage.FETCH_SUCCESS)
-                    .shows(showDtos)
-                    .summary(summary)
-                    .build());
+            // Step 8: Build and return response (SAME pattern as upcoming shows)
+            return ResponseEntity.ok(
+                    ShowsListResponse.builder()
+                            .success(true)
+                            .message(ApiResponseMessage.FETCH_SUCCESS)
+                            .shows(showDtos)
+                            .page(showsPage.getNumber())
+                            .size(showsPage.getSize())
+                            .totalElements(showsPage.getTotalElements())
+                            .totalPages(showsPage.getTotalPages())
+                            .summary(summary)
+                            .build()
+            );
 
         } catch (Exception e) {
             log.error("Unexpected error retrieving running shows", e);
@@ -610,19 +660,16 @@ public class ShowServiceImpl implements ShowService {
 
     @Override
     @Transactional(readOnly = true)
-    public ResponseEntity<ShowsListResponse> getActiveShows(int page, int size) {
-        /**
-         * Retrieves all active shows (both upcoming and running).
-         * Primary API for counter staff dashboard showing current and soon-to-start shows.
-         */
+    public ResponseEntity<ShowsListResponse> getActiveShows(
+            int page,
+            int size,
+            String moviePublicId,
+            String movieName,
+            Long screenId,
+            LocalDate showDate,
+            LocalDateTime startAfter,
+            LocalDateTime endBefore) {
         
-        // 🔒 Step 1: Authentication check
-//        Authentication auth = getAuthenticatedUser();
-//        if (auth == null) {
-//            log.warn("Unauthorized access attempt to getActiveShows");
-//            return buildShowsUnauthorizedResponse();
-//        }
-
         try {
             // Step 2: Validate pagination parameters
             if (page < 0) {
@@ -634,28 +681,78 @@ public class ShowServiceImpl implements ShowService {
                 return buildShowsBadRequestResponse("Page size must be between 1 and 100");
             }
 
-            // Step 3: Create pagination object
+            // Step 3: Validate date filters
+            LocalDateTime now = LocalDateTime.now();
+            LocalDate today = now.toLocalDate();
+            
+            if (showDate != null && showDate.isBefore(today)) {
+                log.warn("Rejected active shows search for past date: {}", showDate);
+                return buildShowsBadRequestResponse("Show date must be today or a future date");
+            }
+            
+            // Ensure startAfter is not in the past for active shows
+            if (startAfter != null && startAfter.isBefore(now)) {
+                startAfter = now; // Auto-correct to current time
+            }
+
+            // Step 4: Create pagination object
             Pageable pageable = PageRequest.of(page, size, Sort.by("startAt").ascending());
 
-            // Step 4: Fetch active shows (SCHEDULED + RUNNING status)
+            // Step 5: Build dynamic query based on filters
             List<Integer> activeStatuses = Arrays.asList(
-                com.telecamnig.cinemapos.utility.Constants.ShowStatus.SCHEDULED.getCode(),
-                com.telecamnig.cinemapos.utility.Constants.ShowStatus.RUNNING.getCode()
+                ShowStatus.SCHEDULED.getCode(),
+                ShowStatus.RUNNING.getCode()
             );
-            
-            Page<Show> showsPage = showRepository.findByStatusIn(
-                activeStatuses, pageable);
 
-            // Step 5: Convert to DTOs
+            // Resolve movieId if moviePublicId is provided
+            Long movieId = null;
+            if (moviePublicId != null && !moviePublicId.isBlank()) {
+                Optional<Movie> movieOpt = movieRepository.findByPublicId(moviePublicId.trim());
+                if (movieOpt.isPresent()) {
+                    movieId = movieOpt.get().getId();
+                } else {
+                    log.warn("Invalid moviePublicId provided: {}", moviePublicId);
+                }
+            }
+
+            // Step 6: Handle date filtering for ticket counter
+            // If showDate is provided, we want ALL shows on that date (including running)
+            // If no showDate, we want today's shows + future shows
+            LocalDateTime fromTimeForQuery;
+            if (showDate != null) {
+                // If filtering by specific date, include ALL shows on that date
+                // Starting from beginning of that day
+                fromTimeForQuery = showDate.atStartOfDay();
+            } else {
+                // If no date filter, show today's shows (including running) + future
+                fromTimeForQuery = today.atStartOfDay();
+            }
+
+         // Step 7: Fetch active shows with filters
+            Page<Show> showsPage = showRepository.searchActiveShows(
+                    activeStatuses,
+                    fromTimeForQuery,           // currentTime parameter (beginning of day)
+                    now,                        // now parameter (current exact time for endAt check)
+                    movieId,
+                    movieName,
+                    screenId,
+                    showDate,
+                    startAfter,
+                    endBefore,
+                    pageable
+            );
+
+            // Step 8: Convert to DTOs
             List<ShowListItemDto> showDtos = showsPage.getContent().stream()
                     .map(this::convertToShowListItemDto)
                     .collect(Collectors.toList());
 
-            // Step 6: Build comprehensive summary
+            // Step 9: Build comprehensive summary
             ShowsSummaryDto summary = buildActiveShowsSummary(showsPage.getContent());
 
-            log.info("Retrieved {} active shows (page {} of {})", 
-                    showDtos.size(), page, showsPage.getTotalPages());
+            log.info("Retrieved {} active shows (page {} of {}) [movie={}, screen={}, date={}, fromTime={}]", 
+                    showDtos.size(), page, showsPage.getTotalPages(),
+                    moviePublicId, screenId, showDate, fromTimeForQuery);
 
             return ResponseEntity.ok(ShowsListResponse.builder()
                     .success(true)
@@ -676,18 +773,19 @@ public class ShowServiceImpl implements ShowService {
 
     @Override
     @Transactional(readOnly = true)
-    public ResponseEntity<ShowsListResponse> getShowHistory(int page, int size) {
-        /**
-         * Retrieves completed and cancelled shows (historical data).
-         * Admin only access for reporting, analytics, and audit purposes.
-         */
+    public ResponseEntity<ShowsListResponse> getShowHistory(
+            int page,
+            int size,
+            Integer status,
+            String moviePublicId,
+            LocalDate showDate) {
         
-        // 🔒 Step 1: Authentication check (already handled by @PreAuthorize, but double-check)
-//        Authentication auth = getAuthenticatedUser();
-//        if (auth == null) {
-//            log.warn("Unauthorized access attempt to getShowHistory");
-//            return buildShowsUnauthorizedResponse();
-//        }
+        // 🔒 Step 1: Authentication check
+        //        Authentication auth = getAuthenticatedUser();
+        //        if (auth == null) {
+        //            log.warn("Unauthorized access attempt to getShowHistory");
+        //            return buildShowsUnauthorizedResponse();
+        //        }
 
         try {
             // Step 2: Validate pagination parameters
@@ -700,30 +798,77 @@ public class ShowServiceImpl implements ShowService {
                 return buildShowsBadRequestResponse("Page size must be between 1 and 100");
             }
 
-            // Step 3: Create pagination object (recent first)
-            org.springframework.data.domain.Pageable pageable = 
-                org.springframework.data.domain.PageRequest.of(page, size, 
-                    org.springframework.data.domain.Sort.by("startAt").descending());
+            // Step 3: Validate status filter (only COMPLETED or CANCELLED)
+            if (status != null) {
+                if (status != ShowStatus.COMPLETED.getCode() && 
+                    status != ShowStatus.CANCELLED.getCode()) {
+                    log.warn("Invalid status provided for history: {}", status);
+                    return buildShowsBadRequestResponse("History API only accepts COMPLETED(2) or CANCELLED(3) status");
+                }
+            }
 
-            // Step 4: Fetch historical shows (COMPLETED + CANCELLED status)
-            List<Integer> historyStatuses = Arrays.asList(
-                com.telecamnig.cinemapos.utility.Constants.ShowStatus.COMPLETED.getCode(),
-                com.telecamnig.cinemapos.utility.Constants.ShowStatus.CANCELLED.getCode()
-            );
+            // Step 4: Validate date filter (cannot be future date)
+            LocalDate today = LocalDate.now();
+            if (showDate != null && showDate.isAfter(today)) {
+                log.warn("Show date cannot be in future for history: {}", showDate);
+                return buildShowsBadRequestResponse("Show date cannot be in the future for historical data");
+            }
+
+            // Step 5: Create pagination object (recent first)
+            Pageable pageable = PageRequest.of(page, size, Sort.by("startAt").descending());
+
+            // Step 6: Build status list
+            List<Integer> historyStatuses;
+            if (status != null) {
+                historyStatuses = Arrays.asList(status);
+            } else {
+                historyStatuses = Arrays.asList(
+                    ShowStatus.COMPLETED.getCode(),
+                    ShowStatus.CANCELLED.getCode()
+                );
+            }
+
+            // Step 7: Resolve movie filter (same pattern as other APIs)
+            Long movieId = null;
+            if (moviePublicId != null && !moviePublicId.isBlank()) {
+                String trimmed = moviePublicId.trim();
+                Optional<Movie> movieOpt = movieRepository.findByPublicId(trimmed);
+                if (movieOpt.isEmpty()) {
+                    log.warn("Invalid moviePublicId provided: {}", trimmed);
+                    return buildShowsBadRequestResponse("Invalid movie reference");
+                }
+                movieId = movieOpt.get().getId();
+            }
+
+            // Step 8: Convert date to datetime range (if provided)
+            LocalDateTime startDateTime = null;
+            LocalDateTime endDateTime = null;
             
-            Page<Show> showsPage = showRepository.findByStatusIn(
-                historyStatuses, pageable);
+            if (showDate != null) {
+                startDateTime = showDate.atStartOfDay();
+                endDateTime = showDate.plusDays(1).atStartOfDay(); // Exclusive boundary
+            }
 
-            // Step 5: Convert to DTOs
+            // Step 9: Execute repository search (matching your other APIs pattern)
+            Page<Show> showsPage = showRepository.searchHistoryShows(
+                    historyStatuses,
+                    movieId,
+                    startDateTime,
+                    endDateTime,
+                    pageable
+            );
+
+            // Step 10: Convert to DTOs (using existing method)
             List<ShowListItemDto> showDtos = showsPage.getContent().stream()
                     .map(this::convertToShowListItemDto)
                     .collect(Collectors.toList());
 
-            // Step 6: Build historical summary
+            // Step 11: Build historical summary
             ShowsSummaryDto summary = buildHistoryShowsSummary(showsPage.getContent());
 
-            log.info("Retrieved {} historical shows (page {} of {})", 
-                    showDtos.size(), page, showsPage.getTotalPages());
+            log.info("Retrieved {} historical shows (page {} of {}) [status={}, moviePublicId={}, showDate={}]", 
+                    showDtos.size(), page, showsPage.getTotalPages(),
+                    status, moviePublicId, showDate);
 
             return ResponseEntity.ok(ShowsListResponse.builder()
                     .success(true)
@@ -742,7 +887,6 @@ public class ShowServiceImpl implements ShowService {
         }
     }
     
-
 	 // ==================== PHASE 3: FILTERED SEARCH APIS ====================
 	
 	 @Override

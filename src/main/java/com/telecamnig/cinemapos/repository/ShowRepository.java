@@ -1,5 +1,6 @@
 package com.telecamnig.cinemapos.repository;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -109,15 +110,99 @@ public interface ShowRepository extends JpaRepository<Show, Long> {
             Pageable pageable
     );
 
+    /**
+     * Searches running shows with optional movie filter.
+     * 
+     * Business Rules:
+     * - Must be in RUNNING status (status = 1)
+     * - Current time must be between startAt (inclusive) and endAt (exclusive)
+     * - If movieId is provided, filter by that movie
+     * 
+     * Ordering: Shows ending soonest first, then by screen
+     */
+    @Query("""
+        SELECT s FROM Show s
+        WHERE s.status = :status
+          AND s.startAt <= :currentTime
+          AND s.endAt > :currentTime
+          AND (:movieId IS NULL OR s.movieId = :movieId)
+        ORDER BY s.endAt ASC, s.screenId ASC
+        """)
+    Page<Show> searchRunningShows(
+            @Param("status") Integer status,
+            @Param("currentTime") LocalDateTime currentTime,
+            @Param("movieId") Long movieId,
+            Pageable pageable
+    );
+    
+    @Query("""
+    	    SELECT s FROM Show s
+    	    LEFT JOIN Movie m ON s.movieId = m.id
+    	    WHERE s.status IN :statuses
+    	      AND (
+    	        (s.status = 0 AND s.startAt >= :currentTime)
+    	        OR
+    	        (s.status = 1 AND s.endAt >= :now)
+    	      )
+    	      AND (:movieId IS NULL OR s.movieId = :movieId)
+    	      AND (:movieName IS NULL OR LOWER(m.title) LIKE LOWER(CONCAT('%', :movieName, '%')))
+    	      AND (:screenId IS NULL OR s.screenId = :screenId)
+    	      AND (:showDate IS NULL OR DATE(s.startAt) = :showDate)
+    	      AND (:startAfter IS NULL OR s.startAt >= :startAfter)
+    	      AND (:endBefore IS NULL OR s.startAt <= :endBefore)
+    	    ORDER BY s.startAt ASC
+    	    """)
+    	Page<Show> searchActiveShows(
+    	        @Param("statuses") List<Integer> statuses,
+    	        @Param("currentTime") LocalDateTime currentTime,
+    	        @Param("now") LocalDateTime now,
+    	        @Param("movieId") Long movieId,
+    	        @Param("movieName") String movieName,
+    	        @Param("screenId") Long screenId,
+    	        @Param("showDate") LocalDate showDate,
+    	        @Param("startAfter") LocalDateTime startAfter,
+    	        @Param("endBefore") LocalDateTime endBefore,
+    	        Pageable pageable
+    	);
+    
+    /**
+     * Searches historical shows with optional filters.
+     * Consistent pattern with other search methods.
+     * 
+     * @param statuses List of status codes (COMPLETED, CANCELLED)
+     * @param movieId Optional movie filter
+     * @param startDateTime Optional start date filter (inclusive)
+     * @param endDateTime Optional end date filter (exclusive)
+     */
+    @Query("""
+        SELECT s FROM Show s
+        WHERE s.status IN :statuses
+          AND (:movieId IS NULL OR s.movieId = :movieId)
+          AND (:startDateTime IS NULL OR s.startAt >= :startDateTime)
+          AND (:endDateTime IS NULL OR s.startAt < :endDateTime)
+        ORDER BY s.startAt DESC
+        """)
+    Page<Show> searchHistoryShows(
+            @Param("statuses") List<Integer> statuses,
+            @Param("movieId") Long movieId,
+            @Param("startDateTime") LocalDateTime startDateTime,
+            @Param("endDateTime") LocalDateTime endDateTime,
+            Pageable pageable
+    );
 
     // ==================== COMPLEX BUSINESS QUERIES ====================
     
     @Query("SELECT s FROM Show s WHERE s.status IN (0, 1) AND s.startAt >= :currentTime ORDER BY s.startAt ASC, s.screenId ASC")
     Page<Show> findActiveShowsForCounter(@Param("currentTime") LocalDateTime currentTime, Pageable pageable);
     
-    @Query("SELECT s FROM Show s WHERE s.status IN (0, 1) AND s.startAt >= :currentTime ORDER BY s.startAt ASC, s.screenId ASC")
-    List<Show> findShowsNeedingStatusUpdate(@Param("currentTime") LocalDateTime currentTime);
-
+    /**
+     * Finds SCHEDULED shows that have reached/passed their start time
+     * (status = 0 AND startAt <= currentTime)
+     * Used by scheduler to auto-update SCHEDULED → RUNNING
+     */
+    @Query("SELECT s FROM Show s WHERE s.status = 0 AND s.startAt <= :currentTime")
+    List<Show> findScheduledShowsToStart(@Param("currentTime") LocalDateTime currentTime);
+    
     // ==================== ADMIN DASHBOARD QUERIES ====================
     
     @Query("SELECT s.status, COUNT(s) FROM Show s GROUP BY s.status")
@@ -140,6 +225,9 @@ public interface ShowRepository extends JpaRepository<Show, Long> {
 
     @Query("SELECT s FROM Show s WHERE s.status = 1 AND s.startAt <= :currentTime AND s.endAt > :currentTime ORDER BY s.screenId ASC")
     List<Show> findRunningShows(@Param("currentTime") LocalDateTime currentTime);
+    
+    @Query("SELECT s FROM Show s WHERE s.status = 1 AND s.endAt <= :currentTime ORDER BY s.screenId ASC")
+    List<Show> findRunningShowsThatHaveEnded(@Param("currentTime") LocalDateTime currentTime);
 
     @Query("SELECT s FROM Show s WHERE s.status IN :statuses")
     Page<Show> findByStatusIn(@Param("statuses") List<Integer> statuses, Pageable pageable);
@@ -148,4 +236,5 @@ public interface ShowRepository extends JpaRepository<Show, Long> {
     Page<Show> findByStartAtBetween(@Param("startDate") LocalDateTime startDate, 
                                    @Param("endDate") LocalDateTime endDate, 
                                    Pageable pageable);
+
 }

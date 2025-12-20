@@ -1,6 +1,10 @@
 package com.telecamnig.cinemapos.repository;
 
-import com.telecamnig.cinemapos.entity.Booking;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -9,11 +13,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Optional;
+import com.telecamnig.cinemapos.entity.Booking;
 
 @Repository
 public interface BookingRepository extends JpaRepository<Booking, Long> {
@@ -68,31 +68,6 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
      */
     @Query("SELECT b FROM Booking b WHERE b.showPublicId = :showPublicId AND b.status IN ('CANCELLED', 'REFUNDED')")
     List<Booking> findCancelledBookingsByShow(@Param("showPublicId") String showPublicId);
-
-    // ========== CUSTOMER-BASED QUERIES ==========
-    
-    /**
-     * Find bookings by customer phone.
-     * Indexed: idx_bookings_customerphone
-     */
-    List<Booking> findByCustomerPhone(String customerPhone);
-
-    /**
-     * Find bookings by customer phone and status.
-     */
-    List<Booking> findByCustomerPhoneAndStatus(String customerPhone, String status);
-
-    /**
-     * Find customer's booking history.
-     */
-    @Query("SELECT b FROM Booking b WHERE b.customerPhone = :customerPhone ORDER BY b.bookedAt DESC")
-    List<Booking> findCustomerBookingHistory(@Param("customerPhone") String customerPhone);
-
-    /**
-     * Find customer's active bookings.
-     */
-    @Query("SELECT b FROM Booking b WHERE b.customerPhone = :customerPhone AND b.status = 'ISSUED' AND b.showStartTime > :currentTime ORDER BY b.showStartTime ASC")
-    List<Booking> findCustomerActiveBookings(@Param("customerPhone") String customerPhone, @Param("currentTime") LocalDateTime currentTime);
 
     // ========== TIME-BASED FILTERS ==========
     
@@ -169,11 +144,6 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
      * Find bookings by show with pagination.
      */
     Page<Booking> findByShowPublicId(String showPublicId, Pageable pageable);
-
-    /**
-     * Find customer bookings with pagination.
-     */
-    Page<Booking> findByCustomerPhone(String customerPhone, Pageable pageable);
 
     /**
      * Find bookings by status and date range with pagination.
@@ -301,5 +271,13 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
      * Count bookings by status.
      */
     long countByStatus(String status);
+    
+    /**
+     * Find Bookings by using bookingGroupRef
+     */
+    List<Booking> findByBookingGroupRef(String bookingGroupRef);
+
+	boolean existsByShowPublicIdAndSeatPublicIdAndStatus(String showPublicId, String seatPublicId, String label);
+
     
 }

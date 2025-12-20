@@ -1,6 +1,7 @@
 package com.telecamnig.cinemapos.service;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 import org.springframework.http.ResponseEntity;
 
@@ -55,11 +56,37 @@ public interface ShowService {
         return getUpcomingShows(page, size, null, null);
     }
     
-    ResponseEntity<ShowsListResponse> getRunningShows();
+    /**
+     * Core running shows API used by controller.
+     * 
+     * @param page page index (0-based)
+     * @param size page size
+     * @param moviePublicId optional movie filter; if null, no movie filter is applied
+     */
+    ResponseEntity<ShowsListResponse> getRunningShows(
+            int page,
+            int size,
+            String moviePublicId
+    );
     
-    ResponseEntity<ShowsListResponse> getActiveShows(int page, int size);
+    ResponseEntity<ShowsListResponse> getActiveShows(
+            int page,
+            int size,
+            String moviePublicId,
+            String movieName,
+            Long screenId,
+            LocalDate showDate,
+            LocalDateTime startAfter,
+            LocalDateTime endBefore
+    );
     
-    ResponseEntity<ShowsListResponse> getShowHistory(int page, int size);
+    ResponseEntity<ShowsListResponse> getShowHistory(
+            int page,
+            int size,
+            Integer status,
+            String moviePublicId,
+            LocalDate showDate
+    );
     
     // Phase 3 methods - Filtered Search & Admin Management APIs
     ResponseEntity<ShowsListResponse> searchShows(ShowSearchRequest request);

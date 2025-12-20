@@ -58,8 +58,8 @@ public class BookingController {
     @PostMapping
     public ResponseEntity<BookingDetailResponse> createBooking(
             @Valid @RequestBody BookingRequestDTO bookingRequest) {
-        log.info("Booking creation request - Show: {}, Seats: {}, Customer: {}", 
-                bookingRequest.getShowPublicId(), bookingRequest.getSeatPublicIds(), bookingRequest.getCustomerName());
+        log.info("Booking creation request - Show: {}, Seats: {}", 
+                bookingRequest.getShowPublicId(), bookingRequest.getSeatPublicIds());
         
         return bookingService.createBooking(bookingRequest);
     }
@@ -182,6 +182,23 @@ public class BookingController {
         log.info("Cancelling booking: {}, reason: {}", bookingPublicId, reason);
         return bookingService.cancelBooking(bookingPublicId, reason);
     }
+    
+    /**
+     * Cancel booking using bookingGroupRef.
+     * Cancels ALL seats booked together.
+     *
+     * Used by counter after successful booking
+     * (Print / Cancel flow)
+     */
+    @PutMapping("/group/{bookingGroupRef}/cancel")
+    public ResponseEntity<BookingDetailResponse> cancelBookingGroup(
+            @PathVariable String bookingGroupRef,
+            @RequestParam(required = false) String reason) {
+
+        log.info("Cancelling booking group: {}, reason: {}", bookingGroupRef, reason);
+        return bookingService.cancelBookingGroup(bookingGroupRef, reason);
+    }
+
 
     /**
      * Process refund for a booking (Admin only).

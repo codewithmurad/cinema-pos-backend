@@ -18,9 +18,7 @@ import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -49,15 +47,10 @@ import lombok.Setter;
            @Index(name = "idx_bookings_publicid", columnList = "public_id"),
            @Index(name = "idx_bookings_showpublicid", columnList = "show_public_id"),
            @Index(name = "idx_bookings_seatpublicid", columnList = "seat_public_id"),
-           @Index(name = "idx_bookings_customerphone", columnList = "customer_phone"),
            @Index(name = "idx_bookings_bookedat", columnList = "booked_at"),
            @Index(name = "idx_bookings_status_bookedat", columnList = "status, booked_at"),
            @Index(name = "idx_bookings_payment_bookedat", columnList = "payment_mode, booked_at"),
            @Index(name = "idx_bookings_bookedby", columnList = "booked_by_user_id")
-       },
-       uniqueConstraints = {
-           // Prevent duplicate bookings for same seat in same show
-           @UniqueConstraint(name = "uq_booking_show_seat", columnNames = {"show_public_id", "seat_public_id"})
        })
 @Getter
 @Setter
@@ -127,13 +120,32 @@ public class Booking {
 
     // ========== PRICING & PAYMENT (IMMUTABLE) ==========
 
+    // ========== PRICING & TAX (IMMUTABLE) ==========
+
     /**
-     * Final price charged at booking time.
-     * IMMUTABLE after creation - preserves historical revenue data.
+     * Base price of the seat (tax exclusive).
+     * This is the ORIGINAL seat price at booking time.
      */
     @NotNull
     @Column(name = "price", precision = 10, scale = 2, nullable = false)
     private BigDecimal price;
+
+    /**
+     * VAT amount applied on base price.
+     * Stored for legal, audit, and reporting purposes.
+     */
+    @NotNull
+    @Column(name = "vat_amount", precision = 10, scale = 2, nullable = false)
+    private BigDecimal vatAmount;
+
+    /**
+     * Final amount paid by customer (price + VAT).
+     * NEVER recompute later.
+     */
+    @NotNull
+    @Column(name = "total_amount", precision = 10, scale = 2, nullable = false)
+    private BigDecimal totalAmount;
+
 
     /**
      * Payment method used for this booking.
@@ -151,33 +163,14 @@ public class Booking {
     @Size(max = 100)
     @Column(name = "transaction_reference", length = 100)
     private String transactionReference;
-
-    // ========== CUSTOMER DETAILS ==========
-
+    
     /**
-     * Customer full name for ticket printing and identification.
+     * Common reference for seats booked in the SAME transaction.
+     * Example: booking 5 seats at once → same bookingGroupRef.
      */
     @NotBlank
-    @Size(max = 100)
-    @Column(name = "customer_name", nullable = false, length = 100)
-    private String customerName;
-
-    /**
-     * Customer phone number (essential for Nigerian context).
-     * Used for SMS notifications, contact tracing, and marketing.
-     */
-    @NotBlank
-    @Size(max = 20)
-    @Column(name = "customer_phone", nullable = false, length = 20)
-    private String customerPhone;
-
-    /**
-     * Optional email for digital tickets and receipts.
-     */
-    @Email
-    @Size(max = 100)
-    @Column(name = "customer_email", length = 100)
-    private String customerEmail;
+    @Column(name = "booking_group_ref", length = 36, nullable = false)
+    private String bookingGroupRef;
 
     // ========== BOOKING METADATA ==========
 
@@ -312,8 +305,7 @@ public class Booking {
      *
      * IMMUTABILITY RULES:
      * - Once created, these fields should NEVER change:
-     *   publicId, showPublicId, seatPublicId, price, customerName, 
-     *   customerPhone, customerEmail, bookedAt, paymentMode,
+     *   publicId, showPublicId, seatPublicId, price, bookedAt, paymentMode,
      *   showStartTime, showEndTime, screenName, bookedByUserId
      *
      * - For corrections, create a new booking and cancel the old one
