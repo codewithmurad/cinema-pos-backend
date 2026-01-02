@@ -70,8 +70,8 @@ public class AuthController {
         return authService.forgotPassword(request);
     }
 
-    @PreAuthorize("isAuthenticated()")
-//    @PostMapping("/change-password")
+//    @PreAuthorize("isAuthenticated()")
+    @PostMapping("/change-password")
     public ResponseEntity<CommonApiResponse> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         return authService.changePassword(request);
     }

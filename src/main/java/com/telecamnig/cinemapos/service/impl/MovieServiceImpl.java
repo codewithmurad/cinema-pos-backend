@@ -170,12 +170,12 @@ public class MovieServiceImpl implements MovieService {
     public ResponseEntity<CommonApiResponse> updateMovieStatus(String publicId, Integer status) {
     	
     	// 🔒 Step 1: Check authentication
-        Authentication auth = getAuthenticatedUser();
-        if (auth == null) {
-            log.warn("Unauthorized access attempt to addMovie()");
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
-        }
+//        Authentication auth = getAuthenticatedUser();
+//        if (auth == null) {
+//            log.warn("Unauthorized access attempt to addMovie()");
+//            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//                    .body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
+//        }
     	
         // Validate incoming status against enum-derived allowed codes
         if (status == null || !ALLOWED_STATUS_CODES.contains(status)) {
@@ -215,13 +215,13 @@ public class MovieServiceImpl implements MovieService {
 	public ResponseEntity<CommonApiResponse> updateMovieDetails(String publicId, UpdateMovieRequest request) {
 		
 		// 1) Ensure authenticated
-		Authentication auth = getAuthenticatedUser();
-
-		if (auth == null) {
-			log.warn("Unauthorized attempt to update movie details for publicId={}", publicId);
-			return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-					.body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
-		}
+//		Authentication auth = getAuthenticatedUser();
+//
+//		if (auth == null) {
+//			log.warn("Unauthorized attempt to update movie details for publicId={}", publicId);
+//			return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//					.body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
+//		}
 
 		// 2) Validate DTO programmatically (controller @Valid already applied but
 		// double-check)
@@ -310,13 +310,13 @@ public class MovieServiceImpl implements MovieService {
 	public ResponseEntity<CommonApiResponse> updateMoviePoster(String publicId, MultipartFile poster) {
 		
 		// 1) Ensure caller is authenticated
-		Authentication auth = getAuthenticatedUser();
-		
-		if (auth == null) {
-			log.warn("Unauthorized attempt to upload poster for movie {}", publicId);
-			return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-					.body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
-		}
+//		Authentication auth = getAuthenticatedUser();
+//		
+//		if (auth == null) {
+//			log.warn("Unauthorized attempt to upload poster for movie {}", publicId);
+//			return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//					.body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
+//		}
 
 		// 2) Basic null/empty check (LocalStorageService will also validate size/type)
 		if (poster == null || poster.isEmpty()) {

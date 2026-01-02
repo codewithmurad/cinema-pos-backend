@@ -44,7 +44,7 @@ public class UserController {
      * GET /api/v1/users?role=ADMIN&status=1
      * role is required, status optional
      */
-    @PreAuthorize("isAuthenticated()")
+//    @PreAuthorize("isAuthenticated()")
     @GetMapping
     public ResponseEntity<UsersResponse> getUsersByRoleAndStatus(
             @RequestParam("role") String role,
@@ -56,7 +56,7 @@ public class UserController {
      * Update user status (ADMIN only).
      * PUT /api/v1/users/{userId}/status
      */
-    @PreAuthorize("hasRole('ADMIN')")
+//    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{userId}/update/status")
     public ResponseEntity<CommonApiResponse> updateUserStatus(
             @PathVariable("userId") @NotBlank String userId,

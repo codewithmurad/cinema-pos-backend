@@ -114,30 +114,30 @@ public class UserServiceImpl implements UserService {
                     .body(new CommonApiResponse(false, ApiResponseMessage.INVALID_USER_STATUS_CODE));
         }
 
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+//        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+//
+//        if (authentication == null || !authentication.isAuthenticated()) {
+//            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//                    .body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
+//        }
 
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
-        }
+//        String loggedInEmail = authentication.getName(); // since our UserDetailsService uses email
+//        Optional<User> loggedInUserOpt = userRepository.findByEmailId(loggedInEmail);
+//
+//        if (loggedInUserOpt.isEmpty()) {
+//            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+//                    .body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
+//        }
 
-        String loggedInEmail = authentication.getName(); // since our UserDetailsService uses email
-        Optional<User> loggedInUserOpt = userRepository.findByEmailId(loggedInEmail);
-
-        if (loggedInUserOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(new CommonApiResponse(false, ApiResponseMessage.UNAUTHORIZED_ACCESS));
-        }
-
-        User loggedInUser = loggedInUserOpt.get();
-
-        boolean isAdmin = loggedInUser.getRoles().stream()
-                .anyMatch(role -> UserRole.ROLE_ADMIN.value().equalsIgnoreCase(role.getName()));
-
-        if (!isAdmin) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(new CommonApiResponse(false, ApiResponseMessage.ACCESS_DENIED));
-        }
+//        User loggedInUser = loggedInUserOpt.get();
+//
+//        boolean isAdmin = loggedInUser.getRoles().stream()
+//                .anyMatch(role -> UserRole.ROLE_ADMIN.value().equalsIgnoreCase(role.getName()));
+//
+//        if (!isAdmin) {
+//            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+//                    .body(new CommonApiResponse(false, ApiResponseMessage.ACCESS_DENIED));
+//        }
 
         Optional<User> targetUserOpt = userRepository.findByUserId(publicUserId.trim());
         if (targetUserOpt.isEmpty()) {
@@ -147,10 +147,10 @@ public class UserServiceImpl implements UserService {
 
         User targetUser = targetUserOpt.get();
 
-        if (loggedInUser.getUserId().equals(targetUser.getUserId())) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(new CommonApiResponse(false, ApiResponseMessage.SELF_STATUS_CHANGE_NOT_ALLOWED));
-        }
+//        if (loggedInUser.getUserId().equals(targetUser.getUserId())) {
+//            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+//                    .body(new CommonApiResponse(false, ApiResponseMessage.SELF_STATUS_CHANGE_NOT_ALLOWED));
+//        }
 
         targetUser.setStatus(status);
         userRepository.save(targetUser);
