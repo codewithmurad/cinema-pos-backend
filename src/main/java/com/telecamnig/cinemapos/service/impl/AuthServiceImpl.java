@@ -176,7 +176,6 @@ public class AuthServiceImpl implements AuthService {
     	            .body(new CommonApiResponse(false, "Password must be at least 8 characters with mix of letters and numbers"));
     	}
 
-
         if (userRepository.existsByEmailId(email)) {
             throw new UserAlreadyExistsException(ApiResponseMessage.EMAIL_ALREADY_EXISTS);
         }

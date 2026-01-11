@@ -889,6 +889,98 @@ public class Constants {
             throw new IllegalArgumentException("Unknown action: " + value);
         }
     }
+    
+    // ************** FOOD RELATED CONSTANTS **************
+    
+    public enum FoodCategoryStatus {
 
+        INACTIVE(0, "Inactive"),
+        ACTIVE(1, "Active"),
+        DELETED(2, "Deleted");
+
+        private final int code;
+        private final String label;
+
+        FoodCategoryStatus(int code, String label) {
+            this.code = code;
+            this.label = label;
+        }
+
+        public int getCode() {
+            return code;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public static FoodCategoryStatus fromCode(int code) {
+            for (FoodCategoryStatus s : values()) {
+                if (s.code == code) return s;
+            }
+            return INACTIVE;
+        }
+    }
+    
+    public enum FoodStatus {
+
+        INACTIVE(0, "Inactive"),
+        ACTIVE(1, "Active"),
+        DELETED(2, "Deleted");
+
+        private final int code;
+        private final String label;
+
+        FoodStatus(int code, String label) {
+            this.code = code;
+            this.label = label;
+        }
+
+        public int getCode() {
+            return code;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public static FoodStatus fromCode(int code) {
+            for (FoodStatus s : values()) {
+                if (s.code == code) return s;
+            }
+            return INACTIVE;
+        }
+    }
+    
+    public enum FoodOrderStatus {
+
+        CREATED(0, "Created"),
+        PAID(1, "Paid"),
+        CANCELLED(2, "Cancelled"),
+        REFUNDED(3, "Refunded");
+
+        private final int code;
+        private final String label;
+
+        FoodOrderStatus(int code, String label) {
+            this.code = code;
+            this.label = label;
+        }
+
+        public int getCode() {
+            return code;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public static FoodOrderStatus fromCode(int code) {
+            for (FoodOrderStatus s : values()) {
+                if (s.code == code) return s;
+            }
+            return CREATED;
+        }
+    }
         
 }

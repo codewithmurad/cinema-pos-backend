@@ -278,6 +278,67 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     List<Booking> findByBookingGroupRef(String bookingGroupRef);
 
 	boolean existsByShowPublicIdAndSeatPublicIdAndStatus(String showPublicId, String seatPublicId, String label);
+	
+	/**
+	 * Get ticket dashboard summary for a date range
+	 */
+	@Query("""
+	    SELECT 
+	        COALESCE(SUM(b.totalAmount), 0) as totalRevenue,
+	        COUNT(b) as ticketsSold,
+	        COALESCE(SUM(b.vatAmount), 0) as vatCollected
+	    FROM Booking b 
+	    WHERE b.status = :status 
+	    AND b.bookedAt BETWEEN :start AND :end
+	    """)
+	List<Object[]> getTicketDashboardSummary(
+	        @Param("start") LocalDateTime start,
+	        @Param("end") LocalDateTime end,
+	        @Param("status") String status
+	);
 
-    
+	/**
+	 * Get ticket payment summary grouped by payment mode
+	 */
+	@Query("""
+	    SELECT 
+	        b.paymentMode,
+	        COALESCE(SUM(b.totalAmount), 0) as revenue,
+	        COALESCE(SUM(b.vatAmount), 0) as vat,
+	        COUNT(b) as ticketCount
+	    FROM Booking b 
+	    WHERE b.status = :status 
+	    AND b.bookedAt BETWEEN :start AND :end
+	    GROUP BY b.paymentMode
+	    """)
+	List<Object[]> getTicketPaymentSummary(
+	        @Param("start") LocalDateTime start,
+	        @Param("end") LocalDateTime end,
+	        @Param("status") String status
+	);
+
+	/**
+	 * Get top performing movies by tickets sold and revenue
+	 * Using JPQL - Let Spring handle pagination
+	 */
+	@Query("""
+		    SELECT 
+		        m.title,
+		        COUNT(b) as ticketCount,
+		        SUM(b.totalAmount) as totalRevenue
+		    FROM Booking b
+		    JOIN Show s ON b.showPublicId = s.publicId
+		    JOIN Movie m ON s.movieId = m.id
+		    WHERE b.status = :status 
+		    AND b.bookedAt BETWEEN :start AND :end
+		    GROUP BY m.id, m.title
+		    ORDER BY COUNT(b) DESC, SUM(b.totalAmount) DESC
+		    """)
+		List<Object[]> findTopPerformingMovies(
+		        @Param("start") LocalDateTime start,
+		        @Param("end") LocalDateTime end,
+		        @Param("status") String status,
+		        Pageable pageable  // Add Pageable for first N results
+		);
+
 }

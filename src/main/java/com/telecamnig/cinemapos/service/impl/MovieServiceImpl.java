@@ -32,6 +32,7 @@ import com.telecamnig.cinemapos.entity.Movie;
 import com.telecamnig.cinemapos.repository.MovieRepository;
 import com.telecamnig.cinemapos.service.MovieService;
 import com.telecamnig.cinemapos.storage.LocalStorageService;
+import com.telecamnig.cinemapos.storage.StorageService;
 import com.telecamnig.cinemapos.utility.ApiResponseMessage;
 import com.telecamnig.cinemapos.utility.Constants.MovieStatus;
 
@@ -110,7 +111,7 @@ public class MovieServiceImpl implements MovieService {
         	}
         	
             try {
-                posterPath = localStorageService.store(posterFile);
+                posterPath = localStorageService.store(posterFile, StorageService.StorageType.POSTERS);
                 log.info("Poster uploaded successfully via LocalStorageService: {}", posterPath);
             } catch (IOException e) {
                 log.error("Failed to upload poster image via LocalStorageService", e);
@@ -339,7 +340,7 @@ public class MovieServiceImpl implements MovieService {
 		try {
 			// 4) Store file (may throw IllegalArgumentException, IOException,
 			// SecurityException)
-			String relativePath = localStorageService.store(poster);
+			String relativePath = localStorageService.store(poster, StorageService.StorageType.POSTERS);
 			
 			if (relativePath == null || relativePath.isBlank()) {
 				log.error("LocalStorageService returned empty path for movie {}", publicId);
@@ -718,7 +719,7 @@ public class MovieServiceImpl implements MovieService {
 	    String posterPath = movie.getPosterPath();
 	   
 	    try {
-	        Resource resource = localStorageService.loadAsResource(posterPath);
+	        Resource resource = localStorageService.loadAsResource(posterPath, StorageService.StorageType.POSTERS);
 	        if (resource == null || !resource.exists()) {
 	            log.warn("Poster resource not found for movie {} path={}", publicId, posterPath);
 	            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
